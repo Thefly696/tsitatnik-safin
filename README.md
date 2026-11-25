@@ -1,95 +1,94 @@
 # Цитатник Сафина — серверная часть и CI/CD
 
-Репозиторий: https://github.com/Thefly696/tsitatnik-safin, ветка `main`.
+Репозиторий: https://github.com/Thefly696/tsitatnik-safin, ветка main.
 
-## Структура
+## Состав
 
-- `docs/.nojekyll` — отключает Jekyll.
-- `docs/widget_data.json` — публичный JSON для приложения.
-- `scripts/requirements.txt` — requests и beautifulsoup4.
-- `scripts/update_widget.py` — Telegram → Gemini REST → JSON.
-- `scripts/tests/test_update_widget.py` — unit-тесты unittest.
-- `.github/workflows/update_content.yml` — ежечасное обновление.
-- `.github/workflows/build_release.yml` — Android APK и GitHub Releases.
-- `android/` — Android Gradle-проект добавляется владельцем.
+- docs/.nojekyll — пустой маркер GitHub Pages.
+- docs/widget_data.json — публичный JSON виджета и версии приложения.
+- scripts/requirements.txt — только requests и beautifulsoup4.
+- scripts/update_widget.py — Telegram-парсер и Gemini REST-суммаризатор.
+- scripts/tests/test_update_widget.py — unit-тесты unittest.
+- .github/workflows/update_content.yml — ежечасное обновление цитат.
+- .github/workflows/build_release.yml — сборка APK и публикация релиза.
+- android/ — сюда загружается проект, экспортированный из Google AI Studio.
 
-## GitHub Pages
+## 1. GitHub Pages
 
-Откройте **Settings → Pages**. В разделе Build and deployment выберите **Deploy from a branch**, ветку `main` и папку `/docs`. После публикации JSON будет доступен:
+Откройте Settings → Pages → Build and deployment. Выберите Deploy from a branch, ветку main и папку /docs, нажмите Save.
 
-`https://thefly696.github.io/tsitatnik-safin/widget_data.json`
+URL JSON после публикации:
+https://thefly696.github.io/tsitatnik-safin/widget_data.json
 
-## Секреты
+## 2. Секреты
 
-В **Settings → Secrets and variables → Actions** добавьте:
+В Settings → Secrets and variables → Actions → New repository secret добавьте:
 
 | Secret | Назначение |
 |---|---|
-| `LLM_API_KEY` | Обязательный Gemini API key |
-| `KEYSTORE_BASE64` | Keystore в Base64 |
-| `KEYSTORE_PASSWORD` | Пароль keystore |
-| `KEY_ALIAS` | Alias ключа |
-| `KEY_PASSWORD` | Пароль ключа |
+| LLM_API_KEY | Обязательный Gemini API key |
+| KEYSTORE_BASE64 | Keystore в Base64 |
+| KEYSTORE_PASSWORD | Пароль keystore |
+| KEY_ALIAS | Alias ключа |
+| KEY_PASSWORD | Пароль приватного ключа |
 
-Последние четыре секрета нужны для подписанного release APK. Если хотя бы один отсутствует, собирается debug APK. Не помещайте секреты в код или JSON.
+Все четыре секрета подписи нужны для release APK. Если отсутствует хотя бы один, workflow соберёт debug APK.
 
-Пример создания keystore (резервную копию храните безопасно):
+Создание keystore (сохраните файл и резервную копию в безопасном месте):
 
-```bash
-keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias tsitatnik
-base64 -w 0 release.jks
-```
+    keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias tsitatnik
+    base64 -w 0 release.jks
 
-Android Gradle-проект должен самостоятельно использовать переменные `ANDROID_KEYSTORE_PATH`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD` в release signingConfig. Workflow декодирует ключ и передаёт переменные, но не меняет Gradle-конфигурацию приложения.
+Вывод Base64 целиком поместите в KEYSTORE_BASE64, остальные значения — в три соответствующих секрета. Потеря keystore может помешать выпускать совместимые обновления уже установленного приложения.
 
-## Обновление контента
+CI передаёт Android Gradle-проекту переменные RELEASE_KEYSTORE_PATH, RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS и RELEASE_KEY_PASSWORD. Android-проект должен самостоятельно использовать их в release signingConfig; CI не переписывает Gradle-файлы. После загрузки исходников проверьте, что signingConfig подключён к этим env-переменным.
 
-Workflow `Update Telegram content` запускается каждый час на 17-й минуте и вручную через **Actions → Update Telegram content → Run workflow**.
+## 3. Обновление Telegram
 
-Скрипт загружает `https://t.me/s/{TG_CHANNEL}` с браузерным User-Agent, русским Accept-Language и timeout 30 секунд. По умолчанию `TG_CHANNEL=safin4`, `GEMINI_MODEL=gemini-4-hydrogen`; при необходимости измените env в workflow.
+Workflow Update Telegram content запускается каждый час на 17-й минуте (17 * * * *) или вручную через Actions → Update Telegram content → Run workflow.
 
-Первый запуск выполняет backfill за 30 дней: максимум 12 страниц с паузой 1,5 секунды. Штатный запуск проверяет первую страницу и новые ID. URL, @упоминания и #хештеги удаляются для фильтра длины; тексты короче 50 символов пропускаются. Gemini вызывается через REST API, backfill отправляется батчами по 8 с паузой 4,5 секунды. На HTTP 429/503 предусмотрен один повтор через 8 секунд.
+Параметры: LLM_API_KEY из Secrets, TG_CHANNEL=safin4, GEMINI_MODEL=gemini-4-hydrogen.
 
-Модель отбирает содержательные психологические публикации, исключая рекламу, курсы, вебинары, организационные объявления и видео/стримы без самостоятельной мысли. Резюме — 1–2 предложения на русском, до 160 символов. Данные дедуплицируются по post_id, сортируются по убыванию ID и ограничиваются последними 30 днями (с сохранением минимум одной самой свежей записи).
+Скрипт загружает https://t.me/s/{TG_CHANNEL} с браузерным User-Agent, Accept-Language: ru-RU,ru;q=0.9, timeout 30 секунд. Извлекает цифровой post ID, URL, дату и текст, заменяет HTML <br> на перевод строки. Для фильтра копия текста очищается от ссылок, @упоминаний, #хештегов и пробелов; после очистки тексты короче 50 символов пропускаются.
 
-JSON записывается атомарно через временный файл и `os.replace`. Если новых подходящих публикаций нет, Gemini не вызывается и файл не переписывается. Ошибка сети, пустой HTML или сбой API завершают скрипт с ненулевым кодом без изменения прежнего JSON.
+Первый запуск (пустой quotes, last_checked_post_id="0") делает backfill за 30 дней: максимум 12 страниц через ?before=<min_post_id>, пауза 1,5 секунды. В штатном режиме читается только первая страница и берутся новые текстовые посты. Если подходящих новых постов нет, код завершения 0, Gemini не вызывается, JSON не переписывается.
 
-## Локальный запуск и тесты
+Gemini REST: POST https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent. Таймаут 90 секунд; заголовки x-goog-api-key и Content-Type: application/json. В generationConfig передаются thinkingConfig: {thinkingLevel: "low"}, responseMimeType: "application/json" и responseSchema; temperature/topP/topK/thinkingBudget не передаются. При 429/503 — один повтор через 10 секунд. Backfill: батчи по 5, пауза 5 секунд; штатный режим — одним запросом.
 
-Python 3.12+:
+Модель отбрасывает рекламу, курсы, вебинары, наборы на обучение, организационные объявления и видео/стримы без самостоятельной мысли. Для психологических публикаций возвращает 1–2 коротких предложения на русском языке без Markdown, эмодзи, хештегов и внешних кавычек. Переносы/кавычки очищаются; при длине больше 160 символов делается одна попытка сокращения до 145, затем остаток обрезается по последнему целому слову до 159 символов + ….
 
-```bash
-python -m pip install -r scripts/requirements.txt
-export LLM_API_KEY="ваш_ключ"
-python -m unittest discover -s scripts/tests
-python scripts/update_widget.py
-```
+Цитаты объединяются без дублей по post_id, сортируются по убыванию ID и ограничиваются 30 днями (если все старые — сохраняется самая свежая). last_checked_post_id — максимальный ID среди просмотренных текстовых постов, включая отсеянные объявления. schema_version и app_update сохраняются, updated_at обновляется в UTC ISO-8601.
 
-PowerShell:
+Запись JSON атомарная, UTF-8 (ensure_ascii=False, indent=2). Ошибка сети, пустой HTML или сбой API завершают скрипт с ненулевым кодом без перезаписи прежнего JSON.
 
-```powershell
-$env:LLM_API_KEY = "ваш_ключ"
-python -m unittest discover -s scripts/tests
-```
+Локально (Python 3.12+):
 
-## Android build / release
+    python -m pip install -r scripts/requirements.txt
+    export LLM_API_KEY="ваш_ключ"
+    python -m unittest discover -s scripts/tests
+    python scripts/update_widget.py
 
-Загрузите Gradle Android-проект в `/android`. Сборка использует Temurin JDK 17 и Gradle 8.11.1. Триггеры: push изменений `android/**`, push тега `v*`, ручной запуск с boolean `publish_release` (default false).
+## 4. Android APK / GitHub Releases
 
-При наличии всех секретов подписи создаётся `TsitatnikSafina-release.apk`, иначе — `TsitatnikSafina-debug.apk`. APK загружается как Actions artifact на 30 дней. При теге `v*` или ручном запуске с `publish_release=true` APK публикуется в GitHub Releases.
+Загрузите проект Google AI Studio в /android. CI использует ubuntu-latest и Temurin JDK 17. Если есть android/gradlew, workflow делает chmod +x и использует именно wrapper (его Gradle/AGP версии). Без wrapper устанавливается системный Gradle 8.11.1 через gradle/actions/setup-gradle@v4.
 
-Пример релиза:
+Триггеры: push изменений android/**, push тега v*, ручной запуск. В ручном запуске есть publish_release (boolean, default false) и необязательный release_tag (например, v1.0.0). При публикации без указанного тега и без tag-trigger создаётся manual-<номер запуска>.
 
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
+С четырьмя секретами подписи собирается assembleRelease и создаётся TsitatnikSafina-release.apk; без них — assembleDebug и TsitatnikSafina-debug.apk. APK всегда выгружается в Actions artifacts на 30 дней. При теге v* или publish_release=true он прикрепляется к GitHub Release.
 
-Если `/android` отсутствует или ещё не содержит Gradle-проект, workflow сообщает об этом и пропускает сборку.
+Публикация по тегу:
 
-## Важное перед production
+    git tag v1.0.0
+    git push origin v1.0.0
 
-1. Убедитесь, что Google Gemini API действительно предоставляет проекту модель с ID `gemini-4-hydrogen`. При 404 укажите доступный ID через `GEMINI_MODEL`; молчаливой подмены нет.
-2. Проверьте права GitHub Actions на запись в Contents и создание Releases (**Settings → Actions → General**).
-3. Проверьте signingConfig в Android-проекте.
-4. JSON публичен — не помещайте туда персональные данные или секреты.
+Если /android отсутствует, workflow успешно пропускает сборку с уведомлением.
+
+## 5. Перед запуском
+
+1. Добавьте LLM_API_KEY, запустите content workflow вручную.
+2. Включите Pages: main → /docs.
+3. В Settings → Actions → General разрешите Actions запись в Contents и создание Releases.
+4. После загрузки Android-проекта проверьте signingConfig и wrapper.
+5. Проверьте доступность gemini-4-hydrogen в вашем API-проекте и поддержку thinkingLevel="low". Без API-ключа live-запрос не выполнялся.
+
+JSON публичен. Не добавляйте туда секреты и персональные данные.
