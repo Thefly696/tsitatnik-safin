@@ -90,6 +90,43 @@ class GeminiTests(unittest.TestCase):
         for key in ("temperature", "topP", "topK", "thinkingBudget"):
             self.assertNotIn(key, config)
 
+    @patch.object(app.time, "sleep")
+    @patch.object(app.requests, "post")
+    @patch.dict("os.environ", {
+        "GEMINI_FALLBACK_MODELS": "gemini-4-hydrogen,gemini-3.5-flash-lite,gemini-3.1-flash-lite"
+    })
+    def test_503_switches_to_fallback_without_thinking_config(self, post_mock, sleep_mock):
+        unavailable = type("Response", (), {"status_code": 503})()
+        success = type("Response", (), {
+            "status_code": 200,
+            "raise_for_status": lambda self: None,
+            "json": lambda self: {"candidates": [{"content": {"parts": [{"text": "[]"}]}}]},
+        })()
+        post_mock.side_effect = [unavailable, unavailable, unavailable, success]
+
+        result = app.gemini_request(
+            "prompt", "test-key", "gemini-4-hydrogen", app.RESULT_SCHEMA
+        )
+
+        self.assertEqual(result, [])
+        self.assertEqual(post_mock.call_count, 4)
+        self.assertEqual([call.args[0].rsplit("/", 1)[-1].split(":")[0]
+                          for call in post_mock.call_args_list],
+                         ["gemini-4-hydrogen"] * 3 + ["gemini-3.5-flash-lite"])
+        self.assertEqual([call.args[1]["json"]["generationConfig"].get("thinkingConfig")
+                          for call in post_mock.call_args_list],
+                         [{"thinkingLevel": "low"}] * 3 + [None])
+        self.assertEqual([call.kwargs["timeout"] for call in post_mock.call_args_list], [90] * 4)
+        self.assertEqual([call.args[1]["json"]["generationConfig"]["responseMimeType"]
+                          for call in post_mock.call_args_list], ["application/json"] * 4)
+        self.assertEqual([call.args[1]["json"]["generationConfig"]["responseSchema"]
+                          for call in post_mock.call_args_list], [app.RESULT_SCHEMA] * 4)
+        self.assertEqual([call.args[1]["headers"]["x-goog-api-key"]
+                          for call in post_mock.call_args_list], ["test-key"] * 4)
+        self.assertEqual([call.args[1]["json"]["generationConfig"].get("thinkingConfig")
+                          for call in post_mock.call_args_list][-1], None)
+        self.assertEqual(sleep_mock.call_args_list, [unittest.mock.call(5), unittest.mock.call(15)])
+
     def test_model_results_are_complete_and_unique(self):
         a = {"post_id": "1", "is_meaningful": True, "summary": "Текст"}
         b = {"post_id": "2", "is_meaningful": False, "summary": ""}
