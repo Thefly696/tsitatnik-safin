@@ -38,7 +38,6 @@ jobs:
             echo "::notice title=Android project missing::Android-проект ещё не загружен в /android; сборка пропущена."
             exit 0
           fi
-
           if [ ! -f "./android/gradlew" ] && \
              [ ! -f "./android/settings.gradle" ] && \
              [ ! -f "./android/settings.gradle.kts" ] && \
@@ -48,7 +47,6 @@ jobs:
             echo "::notice title=Gradle project missing::В /android пока не обнаружен Gradle-проект; сборка пропущена."
             exit 0
           fi
-
           echo "exists=true" >> "$GITHUB_OUTPUT"
           if [ -f "./android/gradlew" ]; then
             echo "wrapper=true" >> "$GITHUB_OUTPUT"
@@ -76,10 +74,10 @@ jobs:
       - name: Configure release signing
         if: steps.android.outputs.exists == 'true'
         env:
-          KEYSTORE_BASE64: ${ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${ secrets.KEY_PASSWORD }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         shell: bash
         run: |
           if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ] && \
@@ -152,7 +150,7 @@ jobs:
         id: release
         shell: bash
         env:
-          INPUT_RELEASE_TAG: ${ inputs.release_tag }}
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             TAG_NAME="$(echo "$GITHUB_REF" | sed 's#^refs/tags/##')"
@@ -167,7 +165,7 @@ jobs:
         if: steps.android.outputs.exists == 'true' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release == true))
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${ steps.release.outputs.tag_name }}
-          target_commitish: ${ github.sha }}
+          tag_name: ${{ steps.release.outputs.tag_name }}
+          target_commitish: ${{ github.sha }}
           files: dist/*.apk
           generate_release_notes: true
