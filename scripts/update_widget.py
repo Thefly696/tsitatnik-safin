@@ -166,7 +166,6 @@ def gemini_request(prompt: str, api_key: str, model: str, schema: dict[str, Any]
         if model_id.startswith("gemini-4-"):
             payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "low"}
 
-        model_available = False
         for attempt in range(3):
             try:
                 response = requests.post(
@@ -203,10 +202,6 @@ def gemini_request(prompt: str, api_key: str, model: str, schema: dict[str, Any]
                 time.sleep(delay)
             else:
                 print(f"[Gemini] Модель {model_id} недоступна после 2 повторов; переключение.")
-                model_available = False
-
-        if model_available:
-            break
 
     raise UpdateError(
         f"Все модели Gemini недоступны. Последняя ошибка: {last_error}"
