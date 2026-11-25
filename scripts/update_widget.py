@@ -127,27 +127,90 @@ SHORTEN_SCHEMA = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {
     "post_id": {"type": "STRING"}, "summary": {"type": "STRING"}}, "required": ["post_id", "summary"]}}
 
 
-def gemini_request(prompt: str, api_key: str, model: str, schema: dict[str, Any]) -> list[dict[str, Any]]:
-    payload = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
-               "generationConfig": {"thinkingConfig": {"thinkingLevel": "low"},
-                                    "responseMimeType": "application/json", "responseSchema": schema}}
-    for attempt in range(2):
-        response = requests.post(GEMINI_URL.format(model=model),
-            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-            json=payload, timeout=90)
-        if response.status_code in (429, 503) and attempt == 0:
-            time.sleep(10)
-            continue
-        response.raise_for_status()
-        try:
-            result = json.loads(response.json()["candidates"][0]["content"]["parts"][0]["text"])
-        except (ValueError, KeyError, IndexError, TypeError) as exc:
-            raise UpdateError(f"Некорректный JSON Gemini: {exc}") from exc
-        if not isinstance(result, list):
-            raise UpdateError("Ответ Gemini должен быть JSON-массивом")
-        return result
-    raise UpdateError("Gemini не ответил после повторной попытки")
+DEFAULT_FALLBACK_MODELS = (
+    "gemini-4-hydrogen,gemini-3.5-flash-lite,"
+    "gemini-3.1-flash-lite,gemini-3.8-flash"
+)
 
+
+def build_model_chain(preferred_model: str) -> list[str]:
+    """Put GEMINI_MODEL first, then unique fallback IDs in configured order."""
+    fallback_value = os.environ.get("GEMINI_FALLBACK_MODELS", DEFAULT_FALLBACK_MODELS)
+    configured = [part.strip() for part in fallback_value.split(",") if part.strip()]
+    ordered = [preferred_model.strip(), *configured]
+    result: list[str] = []
+    seen: set[str] = set()
+    for model_id in ordered:
+        if model_id and model_id not in seen:
+            seen.add(model_id)
+            result.append(model_id)
+    if not result:
+        raise UpdateError("Список моделей Gemini пуст")
+    return result
+
+
+def gemini_request(prompt: str, api_key: str, model: str, schema: dict[str, Any]) -> list[dict[str, Any]]:
+    """Try primary and fallback models; retry transient failures twice per model."""
+    model_chain = build_model_chain(model)
+    retry_delays = (5, 15)
+    last_error: Exception | None = None
+
+    for model_id in model_chain:
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "responseSchema": schema,
+            },
+        }
+        if model_id.startswith("gemini-4-"):
+            payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "low"}
+
+        model_available = False
+        for attempt in range(3):
+            try:
+                response = requests.post(
+                    GEMINI_URL.format(model=model_id),
+                    headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+                    json=payload,
+                    timeout=90,
+                )
+            except requests.exceptions.Timeout as exc:
+                last_error = exc
+                transient_message = f"таймаут модели {model_id}: {exc}"
+            else:
+                if response.status_code not in (429, 503):
+                    response.raise_for_status()
+                    try:
+                        result = json.loads(
+                            response.json()["candidates"][0]["content"]["parts"][0]["text"]
+                        )
+                    except (ValueError, KeyError, IndexError, TypeError) as exc:
+                        raise UpdateError(f"Некорректный JSON Gemini ({model_id}): {exc}") from exc
+                    if not isinstance(result, list):
+                        raise UpdateError(f"Ответ Gemini ({model_id}) должен быть JSON-массивом")
+                    print(f"[Gemini] Успешная модель: {model_id}")
+                    return result
+
+                last_error = requests.HTTPError(
+                    f"{response.status_code} от модели {model_id}", response=response
+                )
+                transient_message = f"HTTP {response.status_code} от модели {model_id}"
+
+            if attempt < 2:
+                delay = retry_delays[attempt]
+                print(f"[Gemini] {transient_message}; повтор {attempt + 1}/2 через {delay} сек.")
+                time.sleep(delay)
+            else:
+                print(f"[Gemini] Модель {model_id} недоступна после 2 повторов; переключение.")
+                model_available = False
+
+        if model_available:
+            break
+
+    raise UpdateError(
+        f"Все модели Gemini недоступны. Последняя ошибка: {last_error}"
+    ) from last_error
 
 def summarize_prompt(posts: list[dict[str, str]]) -> str:
     rules = ("Верни для каждого поста post_id, is_meaningful, summary. false для рекламы, анонсов очных/онлайн-курсов, "
