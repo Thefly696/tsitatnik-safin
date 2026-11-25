@@ -113,19 +113,19 @@ class GeminiTests(unittest.TestCase):
         self.assertEqual([call.args[0].rsplit("/", 1)[-1].split(":")[0]
                           for call in post_mock.call_args_list],
                          ["gemini-4-hydrogen"] * 3 + ["gemini-3.5-flash-lite"])
-        self.assertEqual([call.args[1]["json"]["generationConfig"].get("thinkingConfig")
+        self.assertEqual([call.kwargs["json"]["generationConfig"].get("thinkingConfig")
                           for call in post_mock.call_args_list],
                          [{"thinkingLevel": "low"}] * 3 + [None])
         self.assertEqual([call.kwargs["timeout"] for call in post_mock.call_args_list], [90] * 4)
-        self.assertEqual([call.args[1]["json"]["generationConfig"]["responseMimeType"]
+        self.assertEqual([call.kwargs["json"]["generationConfig"]["responseMimeType"]
                           for call in post_mock.call_args_list], ["application/json"] * 4)
-        self.assertEqual([call.args[1]["json"]["generationConfig"]["responseSchema"]
+        self.assertEqual([call.kwargs["json"]["generationConfig"]["responseSchema"]
                           for call in post_mock.call_args_list], [app.RESULT_SCHEMA] * 4)
-        self.assertEqual([call.args[1]["headers"]["x-goog-api-key"]
+        self.assertEqual([call.kwargs["headers"]["x-goog-api-key"]
                           for call in post_mock.call_args_list], ["test-key"] * 4)
-        self.assertEqual([call.args[1]["json"]["generationConfig"].get("thinkingConfig")
+        self.assertEqual([call.kwargs["json"]["generationConfig"].get("thinkingConfig")
                           for call in post_mock.call_args_list][-1], None)
-        self.assertEqual(sleep_mock.call_args_list, [unittest.mock.call(5), unittest.mock.call(15)])
+        self.assertEqual([call.args[0] for call in sleep_mock.call_args_list], [5, 15])
 
     def test_model_results_are_complete_and_unique(self):
         a = {"post_id": "1", "is_meaningful": True, "summary": "Текст"}
