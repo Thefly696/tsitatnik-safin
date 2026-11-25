@@ -79,7 +79,7 @@ class GeminiTests(unittest.TestCase):
         post_mock.side_effect = [retry, ok]
         self.assertEqual(app.gemini_request("prompt", "secret", "gemini-4-hydrogen", app.RESULT_SCHEMA), [])
         self.assertEqual(post_mock.call_count, 2)
-        sleep_mock.assert_called_once_with(10)
+        sleep_mock.assert_called_once_with(5)
         args = post_mock.call_args.kwargs
         self.assertEqual(args["timeout"], 90)
         self.assertEqual(args["headers"]["x-goog-api-key"], "secret")
