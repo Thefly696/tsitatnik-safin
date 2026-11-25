@@ -5,16 +5,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from scripts import update_widget as app
 from scripts.update_widget import (
-    UpdateError,
-    atomic_write_json,
-    clean_for_filter,
-    enforce_summary_limit,
-    load_data,
-    parse_channel_html,
-    validate_model_results,
+    UpdateError, atomic_write_json, build_updated_data, clean_for_filter,
+    deduplicate_quotes, enforce_summary_limit, is_text_candidate,
+    load_data, parse_channel_html, prune_quotes, validate_model_results,
 )
-
 
 HTML = """
 <div class="tgme_widget_message" data-post="safin4/123">
@@ -25,11 +21,15 @@ HTML = """
   <div class="tgme_widget_message_date"><time datetime="2026-11-23T10:00:00+00:00"></time></div>
   <div class="tgme_widget_message_text">Коротко</div>
 </div>
+<div class="tgme_widget_message" data-post="another/999">
+  <div class="tgme_widget_message_date"><time datetime="2026-11-23T10:00:00+00:00"></time></div>
+  <div class="tgme_widget_message_text">Пост другого канала игнорируется.</div>
+</div>
 """
 
 
 class ParserTests(unittest.TestCase):
-    def test_extracts_post_fields_and_line_breaks(self):
+    def test_extracts_fields_and_br_newline(self):
         posts = parse_channel_html(HTML, "safin4")
         self.assertEqual(len(posts), 2)
         self.assertEqual(posts[0]["post_id"], "123")
@@ -37,31 +37,99 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(posts[0]["published_at"], "2026-11-24T10:00:00+00:00")
         self.assertIn("\n", posts[0]["text"])
 
-    def test_empty_html_fails_closed(self):
-        with self.assertRaises(UpdateError):
-            parse_channel_html("  ", "safin4")
-
-    def test_html_without_message_blocks_fails_closed(self):
-        with self.assertRaises(UpdateError):
-            parse_channel_html("<html><body>blocked</body></html>", "safin4")
+    def test_empty_blocked_and_wrong_channel_html_fail(self):
+        for html in ("", " ", "<html>blocked</html>",
+                     '<div class="tgme_widget_message" data-post="other/1"></div>'):
+            with self.subTest(html=html), self.assertRaises(UpdateError):
+                parse_channel_html(html, "safin4")
 
 
 class FilterTests(unittest.TestCase):
-    def test_removes_urls_mentions_hashtags_and_whitespace(self):
-        cleaned = clean_for_filter("Текст https://example.com @person #тег   продолжение")
-        self.assertEqual(cleaned, "Текст продолжение")
+    def test_strips_urls_mentions_hashtags_and_whitespace(self):
+        self.assertEqual(clean_for_filter("Текст https://x.test @person #тег   продолжение"),
+                         "Текст продолжение")
 
-    def test_summary_is_limited_to_160_characters(self):
+    def test_filters_media_and_short_text(self):
+        self.assertFalse(is_text_candidate("https://t.me/demo @channel #video"))
+        self.assertFalse(is_text_candidate("Короткий текст на 20 символов"))
+        self.assertTrue(is_text_candidate("Содержательная психологическая публикация длиной более пятидесяти символов."))
+
+    def test_summary_cleans_quotes_and_newlines(self):
+        self.assertEqual(enforce_summary_limit(' «Первая\n\nстрока.» '), "Первая строка.")
+
+    def test_summary_limit_and_whole_word_truncation(self):
         result = enforce_summary_limit("слово " * 40)
         self.assertLessEqual(len(result), 160)
         self.assertTrue(result.endswith("…"))
+        self.assertFalse(result.endswith("сло…"))
 
-    def test_short_summary_is_preserved(self):
-        self.assertEqual(enforce_summary_limit("Короткая мысль."), "Короткая мысль.")
+    def test_long_single_word_is_bounded(self):
+        self.assertEqual(len(enforce_summary_limit("я" * 200)), 160)
+
+
+class GeminiTests(unittest.TestCase):
+    @patch.object(app.time, "sleep")
+    @patch.object(app.requests, "post")
+    def test_payload_timeout_and_retry(self, post_mock, sleep_mock):
+        retry = type("Response", (), {"status_code": 429})()
+        ok = type("Response", (), {
+            "status_code": 200, "raise_for_status": lambda self: None,
+            "json": lambda self: {"candidates": [{"content": {"parts": [{"text": "[]"}]}}]},
+        })()
+        post_mock.side_effect = [retry, ok]
+        self.assertEqual(app.gemini_request("prompt", "secret", "gemini-4-hydrogen", app.RESULT_SCHEMA), [])
+        self.assertEqual(post_mock.call_count, 2)
+        sleep_mock.assert_called_once_with(10)
+        args = post_mock.call_args.kwargs
+        self.assertEqual(args["timeout"], 90)
+        self.assertEqual(args["headers"]["x-goog-api-key"], "secret")
+        config = args["json"]["generationConfig"]
+        self.assertEqual(config["thinkingConfig"], {"thinkingLevel": "low"})
+        self.assertEqual(config["responseMimeType"], "application/json")
+        self.assertIn("responseSchema", config)
+        for key in ("temperature", "topP", "topK", "thinkingBudget"):
+            self.assertNotIn(key, config)
+
+    def test_model_results_are_complete_and_unique(self):
+        a = {"post_id": "1", "is_meaningful": True, "summary": "Текст"}
+        b = {"post_id": "2", "is_meaningful": False, "summary": ""}
+        self.assertEqual(set(validate_model_results([a, b], {"1", "2"})), {"1", "2"})
+        for items in ([a], [a, {**b, "post_id": "3"}], [a, a]):
+            with self.subTest(items=items), self.assertRaises(UpdateError):
+                validate_model_results(items, {"1", "2"})
+
+
+class FeedTests(unittest.TestCase):
+    def test_deduplicates_sorts_and_prefers_new_entry(self):
+        old = [{"post_id": "10", "summary": "old"}, {"post_id": "9", "summary": "nine"}]
+        new = [{"post_id": "10", "summary": "updated"}, {"post_id": "11", "summary": "eleven"}]
+        result = deduplicate_quotes(old, new)
+        self.assertEqual([q["post_id"] for q in result], ["11", "10", "9"])
+        self.assertEqual(result[1]["summary"], "updated")
+
+    def test_prunes_old_quotes_but_keeps_newest_if_all_old(self):
+        now = datetime(2026, 11, 25, tzinfo=timezone.utc)
+        recent = {"post_id": "2", "published_at": "2026-11-24T00:00:00Z"}
+        old = {"post_id": "1", "published_at": "2026-10-01T00:00:00Z"}
+        self.assertEqual(prune_quotes([recent, old], now), [recent])
+        self.assertEqual(prune_quotes([old], now), [old])
+
+    def test_update_preserves_app_update_and_schema(self):
+        metadata = {"latest_version_code": 7, "latest_version_name": "1.2.3",
+                    "download_url": "https://example.test/release.apk"}
+        original = {"schema_version": 1, "last_checked_post_id": "10",
+                    "updated_at": "2026-11-25T00:00:00Z", "app_update": metadata, "quotes": []}
+        now = datetime(2026, 11, 25, 12, 0, tzinfo=timezone.utc)
+        updated = build_updated_data(original, [
+            {"post_id": "11", "published_at": "2026-11-25T11:00:00Z", "summary": "Смысл"}
+        ], 11, now)
+        self.assertEqual(updated["app_update"], metadata)
+        self.assertEqual(updated["schema_version"], 1)
+        self.assertEqual(updated["last_checked_post_id"], "11")
 
 
 class JsonSafetyTests(unittest.TestCase):
-    def test_atomic_write_produces_valid_utf8_json(self):
+    def test_atomic_utf8_json_roundtrip(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "widget_data.json"
             payload = {"schema_version": 1, "quotes": [{"summary": "Психология"}]}
@@ -76,21 +144,29 @@ class JsonSafetyTests(unittest.TestCase):
             with self.assertRaises(UpdateError):
                 load_data(path)
 
-    def test_model_cannot_return_unknown_or_missing_posts(self):
-        expected = {"1", "2"}
-        with self.assertRaises(UpdateError):
-            validate_model_results(
-                [{"post_id": "1", "is_meaningful": True, "summary": "Текст."}],
-                expected,
-            )
-        with self.assertRaises(UpdateError):
-            validate_model_results(
-                [
-                    {"post_id": "1", "is_meaningful": True, "summary": "Текст."},
-                    {"post_id": "3", "is_meaningful": False, "summary": ""},
-                ],
-                expected,
-            )
+    @patch.object(app, "fetch_posts", side_effect=RuntimeError("network error"))
+    def test_network_failure_does_not_overwrite_json(self, _mock):
+        original = {"schema_version": 1, "last_checked_post_id": "0",
+                    "updated_at": "2026-11-25T00:00:00Z", "app_update": {"latest_version_code": 1},
+                    "quotes": []}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "widget_data.json"
+            path.write_text(json.dumps(original, ensure_ascii=False), encoding="utf-8")
+            before = path.read_bytes()
+            with patch.object(app, "DATA_PATH", path), patch.dict("os.environ", {"LLM_API_KEY": "test-key"}):
+                with self.assertRaises(RuntimeError):
+                    app.run()
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_failed_replace_leaves_existing_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "widget_data.json"
+            path.write_text('{"old": true}\n', encoding="utf-8")
+            with patch.object(app.os, "replace", side_effect=OSError("disk error")):
+                with self.assertRaises(OSError):
+                    atomic_write_json(path, {"new": True})
+            self.assertEqual(path.read_text(encoding="utf-8"), '{"old": true}\n')
+            self.assertEqual(list(Path(directory).glob("*.tmp")), [])
 
 
 if __name__ == "__main__":
