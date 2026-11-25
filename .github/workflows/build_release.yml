@@ -1,0 +1,119 @@
+name: Build Android APK
+
+on:
+  push:
+    paths:
+      - 'android/**'
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish the APK to GitHub Releases
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check Android project
+        id: android
+        shell: bash
+        run: |
+          if [ ! -d "./android" ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Android project missing::Папка ./android пока отсутствует. Сборка пропущена."
+            echo "Android-проект ещё не загружен. Добавьте Gradle-проект в /android."
+            exit 0
+          fi
+          if [ ! -f "./android/gradlew" ] && [ ! -f "./android/build.gradle" ] && [ ! -f "./android/build.gradle.kts" ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Gradle project missing::В /android не найден Gradle wrapper или build-файл."
+            exit 0
+          fi
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Java
+        if: steps.android.outputs.exists == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        if: steps.android.outputs.exists == 'true'
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
+
+      - name: Configure release signing
+        if: steps.android.outputs.exists == 'true'
+        env:
+          KEYSTORE_BASE64: \${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: \${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: \${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: \${{ secrets.KEY_PASSWORD }}
+        shell: bash
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release-keystore.jks"
+            echo "ANDROID_SIGNING_READY=true" >> "$GITHUB_ENV"
+            echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release-keystore.jks" >> "$GITHUB_ENV"
+          else
+            echo "ANDROID_SIGNING_READY=false" >> "$GITHUB_ENV"
+            echo "::notice title=Unsigned build::Не все секреты подписи заданы; будет собран debug APK."
+          fi
+
+      - name: Build signed release APK
+        if: steps.android.outputs.exists == 'true' && env.ANDROID_SIGNING_READY == 'true'
+        working-directory: ./android
+        env:
+          KEYSTORE_PASSWORD: \${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: \${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: \${{ secrets.KEY_PASSWORD }}
+          ANDROID_KEYSTORE_PATH: \${{ env.ANDROID_KEYSTORE_PATH }}
+        run: gradle assembleRelease
+
+      - name: Build debug APK
+        if: steps.android.outputs.exists == 'true' && env.ANDROID_SIGNING_READY != 'true'
+        working-directory: ./android
+        run: gradle assembleDebug
+
+      - name: Stage APK
+        if: steps.android.outputs.exists == 'true'
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ "$ANDROID_SIGNING_READY" = "true" ]; then
+            APK="$(find android -type f -path '*/build/outputs/apk/release/*.apk' | head -n 1)"
+            [ -n "$APK" ] || { echo "Release APK не найден"; exit 1; }
+            cp "$APK" dist/TsitatnikSafina-release.apk
+          else
+            APK="$(find android -type f -path '*/build/outputs/apk/debug/*.apk' | head -n 1)"
+            [ -n "$APK" ] || { echo "Debug APK не найден"; exit 1; }
+            cp "$APK" dist/TsitatnikSafina-debug.apk
+          fi
+
+      - name: Upload APK artifact
+        if: steps.android.outputs.exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: TsitatnikSafina-apk
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: steps.android.outputs.exists == 'true' && (startsWith(github.ref, 'refs/tags/v') || inputs.publish_release == true)
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.apk
+          generate_release_notes: true
