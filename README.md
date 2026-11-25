@@ -47,13 +47,13 @@ CI передаёт Android Gradle-проекту переменные RELEASE_K
 
 Workflow Update Telegram content запускается каждый час на 17-й минуте (17 * * * *) или вручную через Actions → Update Telegram content → Run workflow.
 
-Параметры: LLM_API_KEY из Secrets, TG_CHANNEL=safin4, GEMINI_MODEL=gemini-4-hydrogen.
+Параметры: LLM_API_KEY из Secrets, TG_CHANNEL=safin4, GEMINI_MODEL=gemini-4-hydrogen. Переменная GEMINI_FALLBACK_MODELS задаёт список резервных моделей через запятую; по умолчанию: gemini-4-hydrogen, gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemini-3.8-flash. GEMINI_MODEL всегда ставится первым, дубликаты удаляются.
 
 Скрипт загружает https://t.me/s/{TG_CHANNEL} с браузерным User-Agent, Accept-Language: ru-RU,ru;q=0.9, timeout 30 секунд. Извлекает цифровой post ID, URL, дату и текст, заменяет HTML <br> на перевод строки. Для фильтра копия текста очищается от ссылок, @упоминаний, #хештегов и пробелов; после очистки тексты короче 50 символов пропускаются.
 
 Первый запуск (пустой quotes, last_checked_post_id="0") делает backfill за 30 дней: максимум 12 страниц через ?before=<min_post_id>, пауза 1,5 секунды. В штатном режиме читается только первая страница и берутся новые текстовые посты. Если подходящих новых постов нет, код завершения 0, Gemini не вызывается, JSON не переписывается.
 
-Gemini REST: POST https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent. Таймаут 90 секунд; заголовки x-goog-api-key и Content-Type: application/json. В generationConfig передаются thinkingConfig: {thinkingLevel: "low"}, responseMimeType: "application/json" и responseSchema; temperature/topP/topK/thinkingBudget не передаются. При 429/503 — один повтор через 10 секунд. Backfill: батчи по 5, пауза 5 секунд; штатный режим — одним запросом.
+Gemini REST: POST https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent. Таймаут 90 секунд; заголовки x-goog-api-key и Content-Type: application/json. В generationConfig передаются thinkingConfig: {thinkingLevel: "low"}, responseMimeType: "application/json" и responseSchema; temperature/topP/topK/thinkingBudget не передаются. При HTTP 429/503 или сетевом таймауте для каждой модели выполняются две повторные попытки с паузами 5 и 15 секунд; после исчерпания попыток скрипт автоматически переходит к следующей модели. Успешная модель выводится в лог. thinkingConfig: {thinkingLevel: low} передаётся только моделям gemini-4-*; для gemini-3.* поле не передаётся. Запрос сокращения длинного summary использует ту же fallback-цепочку. Backfill: батчи по 5, пауза 5 секунд; штатный режим — одним запросом.
 
 Модель отбрасывает рекламу, курсы, вебинары, наборы на обучение, организационные объявления и видео/стримы без самостоятельной мысли. Для психологических публикаций возвращает 1–2 коротких предложения на русском языке без Markdown, эмодзи, хештегов и внешних кавычек. Переносы/кавычки очищаются; при длине больше 160 символов делается одна попытка сокращения до 145, затем остаток обрезается по последнему целому слову до 159 символов + ….
 
