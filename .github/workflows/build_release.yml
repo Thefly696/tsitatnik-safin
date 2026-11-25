@@ -9,10 +9,15 @@ on:
   workflow_dispatch:
     inputs:
       publish_release:
-        description: Publish the APK to GitHub Releases
+        description: Publish APK to GitHub Releases
         required: false
         type: boolean
         default: false
+      release_tag:
+        description: Optional release tag (for example v1.0.0)
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -24,22 +29,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check Android project
+      - name: Check Android project and Gradle wrapper
         id: android
         shell: bash
         run: |
           if [ ! -d "./android" ]; then
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Android project missing::Папка ./android пока отсутствует. Сборка пропущена."
-            echo "Android-проект ещё не загружен. Добавьте Gradle-проект в /android."
+            echo "::notice title=Android project missing::Android-проект ещё не загружен в /android; сборка пропущена."
             exit 0
           fi
-          if [ ! -f "./android/gradlew" ] && [ ! -f "./android/build.gradle" ] && [ ! -f "./android/build.gradle.kts" ]; then
+
+          if [ ! -f "./android/gradlew" ] && \
+             [ ! -f "./android/settings.gradle" ] && \
+             [ ! -f "./android/settings.gradle.kts" ] && \
+             [ ! -f "./android/build.gradle" ] && \
+             [ ! -f "./android/build.gradle.kts" ]; then
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Gradle project missing::В /android не найден Gradle wrapper или build-файл."
+            echo "::notice title=Gradle project missing::В /android пока не обнаружен Gradle-проект; сборка пропущена."
             exit 0
           fi
+
           echo "exists=true" >> "$GITHUB_OUTPUT"
+          if [ -f "./android/gradlew" ]; then
+            echo "wrapper=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "wrapper=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up Java
         if: steps.android.outputs.exists == 'true'
@@ -48,44 +63,65 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle
-        if: steps.android.outputs.exists == 'true'
+      - name: Set up Gradle for wrapper project
+        if: steps.android.outputs.exists == 'true' && steps.android.outputs.wrapper == 'true'
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up system Gradle fallback
+        if: steps.android.outputs.exists == 'true' && steps.android.outputs.wrapper == 'false'
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.11.1
+          gradle-version: '8.11.1'
 
       - name: Configure release signing
         if: steps.android.outputs.exists == 'true'
         env:
-          KEYSTORE_BASE64: \${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: \${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: \${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: \${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_BASE64: ${ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${ secrets.KEY_PASSWORD }}
         shell: bash
         run: |
-          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
-            echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release-keystore.jks"
-            echo "ANDROID_SIGNING_READY=true" >> "$GITHUB_ENV"
-            echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release-keystore.jks" >> "$GITHUB_ENV"
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ] && \
+             [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            KEYSTORE_PATH="$RUNNER_TEMP/tsitatnik-release-keystore.jks"
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+            test -s "$KEYSTORE_PATH"
+            {
+              echo "ANDROID_SIGNING_READY=true"
+              echo "RELEASE_KEYSTORE_PATH=$KEYSTORE_PATH"
+              echo "RELEASE_STORE_PASSWORD=$KEYSTORE_PASSWORD"
+              echo "RELEASE_KEY_ALIAS=$KEY_ALIAS"
+              echo "RELEASE_KEY_PASSWORD=$KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
           else
             echo "ANDROID_SIGNING_READY=false" >> "$GITHUB_ENV"
-            echo "::notice title=Unsigned build::Не все секреты подписи заданы; будет собран debug APK."
+            echo "::notice title=Unsigned build::Не все четыре секрета подписи заданы; будет собран debug APK."
           fi
 
       - name: Build signed release APK
         if: steps.android.outputs.exists == 'true' && env.ANDROID_SIGNING_READY == 'true'
         working-directory: ./android
-        env:
-          KEYSTORE_PASSWORD: \${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: \${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: \${{ secrets.KEY_PASSWORD }}
-          ANDROID_KEYSTORE_PATH: \${{ env.ANDROID_KEYSTORE_PATH }}
-        run: gradle assembleRelease
+        shell: bash
+        run: |
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleRelease
+          else
+            gradle assembleRelease
+          fi
 
       - name: Build debug APK
         if: steps.android.outputs.exists == 'true' && env.ANDROID_SIGNING_READY != 'true'
         working-directory: ./android
-        run: gradle assembleDebug
+        shell: bash
+        run: |
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleDebug
+          else
+            gradle assembleDebug
+          fi
 
       - name: Stage APK
         if: steps.android.outputs.exists == 'true'
@@ -93,11 +129,11 @@ jobs:
         run: |
           mkdir -p dist
           if [ "$ANDROID_SIGNING_READY" = "true" ]; then
-            APK="$(find android -type f -path '*/build/outputs/apk/release/*.apk' | head -n 1)"
+            APK="$(find "$GITHUB_WORKSPACE/android" -type f -path '*/build/outputs/apk/release/*.apk' | sort | head -n 1)"
             [ -n "$APK" ] || { echo "Release APK не найден"; exit 1; }
             cp "$APK" dist/TsitatnikSafina-release.apk
           else
-            APK="$(find android -type f -path '*/build/outputs/apk/debug/*.apk' | head -n 1)"
+            APK="$(find "$GITHUB_WORKSPACE/android" -type f -path '*/build/outputs/apk/debug/*.apk' | sort | head -n 1)"
             [ -n "$APK" ] || { echo "Debug APK не найден"; exit 1; }
             cp "$APK" dist/TsitatnikSafina-debug.apk
           fi
@@ -111,9 +147,27 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Determine release tag
+        if: steps.android.outputs.exists == 'true' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release == true))
+        id: release
+        shell: bash
+        env:
+          INPUT_RELEASE_TAG: ${ inputs.release_tag }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG_NAME="$(echo "$GITHUB_REF" | sed 's#^refs/tags/##')"
+          elif [ -n "$INPUT_RELEASE_TAG" ]; then
+            TAG_NAME="$INPUT_RELEASE_TAG"
+          else
+            TAG_NAME="manual-$GITHUB_RUN_NUMBER"
+          fi
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+
       - name: Publish GitHub Release
-        if: steps.android.outputs.exists == 'true' && (startsWith(github.ref, 'refs/tags/v') || inputs.publish_release == true)
+        if: steps.android.outputs.exists == 'true' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release == true))
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${ steps.release.outputs.tag_name }}
+          target_commitish: ${ github.sha }}
           files: dist/*.apk
           generate_release_notes: true
