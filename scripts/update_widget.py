@@ -208,13 +208,30 @@ def gemini_request(prompt: str, api_key: str, model: str, schema: dict[str, Any]
     ) from last_error
 
 def summarize_prompt(posts: list[dict[str, str]]) -> str:
-    rules = ("Верни для каждого поста post_id, is_meaningful, summary. false для рекламы, анонсов очных/онлайн-курсов, "
-        "вебинаров, наборов на обучение, организационных объявлений и видео/стримов без самостоятельной мысли. "
-        "true только для содержательных психологических постов. Суть на русском, 1–2 законченных предложения, "
-        "строго до 160 символов. Без Markdown, эмодзи, хештегов, внешних кавычек и вводных фраз. Не добавляй фактов. "
-        "Каждый post_id верни ровно один раз.")
+    rules = (
+        "Для каждого поста верни ровно один объект с post_id, is_meaningful и summary. "
+        "Оценивай содержание, а не форму публикации. is_meaningful=false для рекламы, анонсов очных и онлайн-курсов, "
+        "вебинаров, наборов на обучение, организационных объявлений и ссылок на видео/стримы без самостоятельной мысли. "
+        "Для содержательных психологических публикаций is_meaningful=true. "
+        "ГЛАВНАЯ ЗАДАЧА: извлеки главный психологический инсайт или жизненное правило, которое читателю стоит осмыслить. "
+        "Не пересказывай содержание и не описывай, о чём публикация. "
+        "Если перед тобой история, притча, диалог, бытовая ситуация или метафора, не пересказывай сюжет и не называй его формой; "
+        "сформулируй самостоятельный глубокий вывод, ради которого приведена эта история. "
+        "Преобразуй частный случай в точное, применимое к жизни наблюдение, но не добавляй идей, которых нет в исходном тексте. "
+        "Формулировка должна звучать как законченная мудрая и практичная мысль, а не аннотация, заголовок или описание материала. "
+        "Обязательны 1–2 цельных законченных предложения с глаголом. "
+        "СТРОГО ЗАПРЕЩЕНЫ слова и конструкции-аннотации в начале И в любой части summary: "
+        "«Пример», «Иллюстрация», «Метафора», «Разница между», «Разбор», «Объяснение», «Мысль о», "
+        "«В этом посте», «Автор», а также любые назывные заголовки без глагола. "
+        "Не начинай с названия темы или описания приёма; сразу сформулируй вывод. "
+        "Пример нужного стиля: «Попытка заранее прожить будущую потерю не защищает от боли — "
+        "она просто крадёт радость у сегодняшнего дня». "
+        "summary — на русском языке, не более 190 символов, без Markdown, эмодзи, хештегов и внешних кавычек. "
+        "Не добавляй фактов. Для is_meaningful=false верни пустую строку summary. "
+        "Каждый post_id верни ровно один раз."
+    )
     items = [{"post_id": p["post_id"], "text": p["text"]} for p in posts]
-    return rules + "\n\nПубликации:\n" + json.dumps(items, ensure_ascii=False)
+    return rules + "\\n\\nПубликации:\\n" + json.dumps(items, ensure_ascii=False)
 
 
 def validate_model_results(items: list[dict[str, Any]], expected: set[str]) -> dict[str, dict[str, Any]]:
@@ -235,9 +252,9 @@ def validate_model_results(items: list[dict[str, Any]], expected: set[str]) -> d
 
 def enforce_summary_limit(value: str) -> str:
     value = normalize_summary(value)
-    if len(value) <= 160:
+    if len(value) <= 190:
         return value
-    prefix = value[:159]
+    prefix = value[:189]
     if " " in prefix:
         prefix = prefix.rsplit(" ", 1)[0]
     return prefix.rstrip(" ,;:-") + "…"
@@ -246,10 +263,10 @@ def enforce_summary_limit(value: str) -> str:
 def shorten_summaries(results: dict[str, dict[str, Any]], api_key: str, model: str) -> None:
     for item in results.values():
         item["summary"] = normalize_summary(item["summary"])
-    long_ids = [pid for pid, item in results.items() if item["is_meaningful"] and len(item["summary"]) > 160]
+    long_ids = [pid for pid, item in results.items() if item["is_meaningful"] and len(item["summary"]) > 190]
     if not long_ids:
         return
-    prompt = ("Сократи каждую формулировку до максимум 145 символов. Верни JSON-массив объектов post_id и summary, "
+    prompt = ("Сократи каждую формулировку до максимум 175 символов. Верни JSON-массив объектов post_id и summary, "
         "без Markdown и внешних кавычек:\n" + json.dumps(
             [{"post_id": pid, "summary": results[pid]["summary"]} for pid in long_ids], ensure_ascii=False))
     mapped = {}
@@ -338,6 +355,12 @@ def run() -> bool:
     if not channel or not model:
         raise UpdateError("TG_CHANNEL и GEMINI_MODEL не должны быть пустыми")
     data = load_data(DATA_PATH)
+    force_regenerate = os.environ.get("FORCE_REGENERATE", "false").strip().lower() in {"1", "true", "yes", "on"}
+    if force_regenerate:
+        print("[Update] FORCE_REGENERATE=true: игнорируем старые quotes и last_checked_post_id.")
+        data = dict(data)
+        data["quotes"] = []
+        data["last_checked_post_id"] = "0"
     now = datetime.now(timezone.utc)
     posts, max_checked = fetch_posts(channel, data, now)
     if not posts:
