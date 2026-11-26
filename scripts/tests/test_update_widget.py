@@ -65,8 +65,12 @@ class FilterTests(unittest.TestCase):
     def test_prompt_requires_insight_not_plot_description(self):
         prompt = app.summarize_prompt([{"post_id": "1", "text": "История о выборе и ответственности."}])
         self.assertIn("<posts>", prompt)
-        self.assertIn("финальному выводу каждого поста", prompt)
+        self.assertIn("финальный вывод каждого поста", prompt)
         self.assertIn("извлечь из каждого поста главную мысль", app.SYSTEM_INSTRUCTION)
+        self.assertIn("Ты редактор сборника практической психологии", app.SYSTEM_INSTRUCTION)
+        self.assertIn("hidden_mechanism", app.SYSTEM_INSTRUCTION)
+        self.assertIn("final_takeaway", app.SYSTEM_INSTRUCTION)
+        self.assertIn("summary", app.SYSTEM_INSTRUCTION)
         self.assertIn("Читай пост до последнего абзаца", app.SYSTEM_INSTRUCTION)
         self.assertIn("до 185 символов", app.SYSTEM_INSTRUCTION)
         self.assertIn("Пример", app.SYSTEM_INSTRUCTION)
@@ -165,7 +169,7 @@ class GeminiTests(unittest.TestCase):
         self.assertEqual(app.RESULT_SCHEMA["items"]["required"], app.RESULT_SCHEMA["items"]["propertyOrdering"])
         prompt = app.summarize_prompt([{"post_id": "1", "text": "Содержательный текст"}])
         for tag in app.ALLOWED_TAGS:
-            self.assertIn(tag, prompt)
+            self.assertIn(tag, app.SYSTEM_INSTRUCTION)
 
     @patch.object(app.time, "sleep")
     @patch.object(app.requests, "post")
