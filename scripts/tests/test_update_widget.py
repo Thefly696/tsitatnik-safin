@@ -256,6 +256,49 @@ class FeedTests(unittest.TestCase):
         self.assertEqual(updated["quotes"][1]["tags"], [])
 
 
+    @patch.object(app.time, "sleep")
+    @patch.object(app, "gemini_request")
+    @patch.object(app, "fetch_posts")
+    def test_flash_lite_fallback_uses_two_post_backfill_batches(
+            self, fetch_mock, gemini_mock, _sleep_mock):
+        posts = [{
+            "post_id": str(pid), "published_at": "2026-11-26T08:00:00Z",
+            "source_url": f"https://t.me/safin4/{pid}",
+            "text": "Содержательная психологическая публикация " * 3,
+        } for pid in range(10, 15)]
+        fetch_mock.return_value = (posts, 14)
+
+        def generate(prompt, _key, _model, _schema):
+            payload = json.loads(prompt.split("<posts>\\n", 1)[1].split("\\n</posts>", 1)[0])
+            return [{
+                "post_id": item["post_id"], "is_meaningful": True,
+                "hidden_mechanism": "Скрытая причина",
+                "final_takeaway": "Практический вывод",
+                "summary": "Осознание причины помогает изменить привычную реакцию.",
+                "tags": ["Осознанность"],
+            } for item in payload]
+
+        gemini_mock.side_effect = generate
+        original = {
+            "schema_version": 1, "last_checked_post_id": "0",
+            "updated_at": "2026-11-25T00:00:00Z",
+            "app_update": {"latest_version_code": 1},
+            "quotes": [],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "widget_data.json"
+            path.write_text(json.dumps(original, ensure_ascii=False), encoding="utf-8")
+            with patch.object(app, "DATA_PATH", path), patch.dict("os.environ", {
+                "LLM_API_KEY": "test-key",
+                "GEMINI_FALLBACK_MODELS": "gemini-4-hydrogen,gemini-3.5-flash-lite",
+            }):
+                app.run()
+            self.assertEqual(gemini_mock.call_count, 3)
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(len(saved["quotes"]), 5)
+
+
+
 class JsonSafetyTests(unittest.TestCase):
     def test_force_regenerate_flag_is_case_insensitive(self):
         for value in ("true", "TRUE", "1", "yes", "YES", " on ", "false", "0", ""):
