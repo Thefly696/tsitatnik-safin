@@ -231,7 +231,7 @@ def summarize_prompt(posts: list[dict[str, str]]) -> str:
         "Каждый post_id верни ровно один раз."
     )
     items = [{"post_id": p["post_id"], "text": p["text"]} for p in posts]
-    return rules + "\\n\\nПубликации:\\n" + json.dumps(items, ensure_ascii=False)
+    return rules + "\n\nПубликации:\n" + json.dumps(items, ensure_ascii=False)
 
 
 def validate_model_results(items: list[dict[str, Any]], expected: set[str]) -> dict[str, dict[str, Any]]:
