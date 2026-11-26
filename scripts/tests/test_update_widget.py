@@ -64,10 +64,12 @@ class FilterTests(unittest.TestCase):
 
     def test_prompt_requires_insight_not_plot_description(self):
         prompt = app.summarize_prompt([{"post_id": "1", "text": "История о выборе и ответственности."}])
-        self.assertIn("извлеки главный психологический инсайт", prompt)
-        self.assertIn("не пересказывай сюжет", prompt)
-        self.assertIn("не более 190 символов", prompt)
-        self.assertIn("СТРОГО ЗАПРЕЩЕНЫ", prompt)
+        self.assertIn("<posts>", prompt)
+        self.assertIn("финальному выводу каждого поста", prompt)
+        self.assertIn("извлечь из каждого поста главную мысль", app.SYSTEM_INSTRUCTION)
+        self.assertIn("не пересказывай", app.SYSTEM_INSTRUCTION)
+        self.assertIn("до 185 символов", app.SYSTEM_INSTRUCTION)
+        self.assertIn("Пример", app.SYSTEM_INSTRUCTION)
 
     def test_summary_limit_and_whole_word_truncation(self):
         result = enforce_summary_limit("слово " * 40)
@@ -240,12 +242,15 @@ class FeedTests(unittest.TestCase):
         now = datetime(2026, 11, 25, 12, 0, tzinfo=timezone.utc)
         updated = build_updated_data(original, [
             {"post_id": "11", "published_at": "2026-11-25T11:00:00Z", "summary": "Смысл",
+             "hidden_mechanism": "Черновая причина", "final_takeaway": "Черновой вывод",
              "tags": ["Границы"]}
         ], 11, now)
         self.assertEqual(updated["app_update"], metadata)
         self.assertEqual(updated["schema_version"], 1)
         self.assertEqual(updated["last_checked_post_id"], "11")
         self.assertEqual(updated["quotes"][0]["tags"], ["Границы"])
+        self.assertNotIn("hidden_mechanism", updated["quotes"][0])
+        self.assertNotIn("final_takeaway", updated["quotes"][0])
         self.assertEqual(updated["quotes"][1]["tags"], [])
 
 
