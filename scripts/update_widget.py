@@ -172,7 +172,6 @@ def gemini_request(prompt: str, api_key: str, model: str, schema: dict[str, Any]
 
     for model_id in model_chain:
         payload = {
-            "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
                 "responseMimeType": "application/json",
@@ -183,6 +182,8 @@ def gemini_request(prompt: str, api_key: str, model: str, schema: dict[str, Any]
             payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "low"}
         else:
             payload["generationConfig"]["temperature"] = 0.25
+        if schema is RESULT_SCHEMA:
+            payload["systemInstruction"] = {"parts": [{"text": SYSTEM_INSTRUCTION}]}
 
         for attempt in range(3):
             try:
