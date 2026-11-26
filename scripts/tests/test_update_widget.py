@@ -141,18 +141,27 @@ class GeminiTests(unittest.TestCase):
                           for call in post_mock.call_args_list][-1], None)
         self.assertEqual([call.args[0] for call in sleep_mock.call_args_list], [5, 15])
 
-    def test_tags_are_filtered_deduplicated_and_limited_to_two(self):
+    def test_tags_are_normalized_filtered_deduplicated_and_limited_to_two(self):
         meaningful = {"post_id": "1", "is_meaningful": True, "summary": "Текст",
-                      "tags": ["Тревога", "Неизвестный тег", "Тревога", "Выбор", "Семья"]}
+                      "tags": [" #Границы ", "отношения", "НЕИЗВЕСТНЫЙ", "ГРАНИЦЫ", "Семья"]}
         rejected = {"post_id": "2", "is_meaningful": False, "summary": "",
                     "tags": ["Отношения"]}
         result = validate_model_results([meaningful, rejected], {"1", "2"})
-        self.assertEqual(result["1"]["tags"], ["Тревога", "Выбор"])
+        self.assertEqual(result["1"]["tags"], ["Границы", "Отношения"])
         self.assertEqual(result["2"]["tags"], [])
+        self.assertEqual(app.normalize_tags(["## границы ", "#ОТНОШЕНИЯ"]), ["Границы", "Отношения"])
+        self.assertEqual(app.normalize_tags(["Посторонний", None, "Семья"]), ["Семья"])
         self.assertEqual(app.RESULT_SCHEMA["items"]["properties"]["tags"]["type"], "ARRAY")
+        self.assertIn("tags", app.RESULT_SCHEMA["items"]["required"])
         prompt = app.summarize_prompt([{"post_id": "1", "text": "Содержательный текст"}])
         for tag in app.ALLOWED_TAGS:
             self.assertIn(tag, prompt)
+
+    def test_meaningful_result_without_allowed_tags_is_rejected(self):
+        item = {"post_id": "1", "is_meaningful": True, "summary": "Текст",
+                "tags": ["неизвестная категория"]}
+        with self.assertRaises(UpdateError):
+            validate_model_results([item], {"1"})
 
     def test_model_results_are_complete_and_unique(self):
         a = {"post_id": "1", "is_meaningful": True, "summary": "Текст", "tags": ["Эмоции"]}
@@ -185,20 +194,32 @@ class FeedTests(unittest.TestCase):
                     "updated_at": "2026-11-25T00:00:00Z", "app_update": metadata, "quotes": []}
         now = datetime(2026, 11, 25, 12, 0, tzinfo=timezone.utc)
         updated = build_updated_data(original, [
-            {"post_id": "11", "published_at": "2026-11-25T11:00:00Z", "summary": "Смысл"}
+            {"post_id": "11", "published_at": "2026-11-25T11:00:00Z", "summary": "Смысл",
+             "tags": ["Границы"]}
         ], 11, now)
         self.assertEqual(updated["app_update"], metadata)
         self.assertEqual(updated["schema_version"], 1)
         self.assertEqual(updated["last_checked_post_id"], "11")
+        self.assertEqual(updated["quotes"][0]["tags"], ["Границы"])
+        self.assertEqual(updated["quotes"][1]["tags"], [])
 
 
 class JsonSafetyTests(unittest.TestCase):
+    def test_force_regenerate_flag_is_case_insensitive(self):
+        for value in ("true", "TRUE", "1", "yes", "YES", " on ", "false", "0", ""):
+            with self.subTest(value=value):
+                self.assertEqual(app.is_force_regenerate(value),
+                                 value.strip().casefold() in {"true", "1", "yes", "on"})
+
     def test_atomic_utf8_json_roundtrip(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "widget_data.json"
             payload = {"schema_version": 1, "quotes": [{"summary": "Психология"}]}
             atomic_write_json(path, payload)
             self.assertEqual(json.loads(path.read_text(encoding="utf-8")), payload)
+            tagged = {"schema_version": 1, "quotes": [{"post_id": "1", "tags": ["Границы"]}]}
+            atomic_write_json(path, tagged)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["quotes"][0]["tags"], ["Границы"])
             self.assertEqual(list(Path(directory).glob("*.tmp")), [])
 
     def test_invalid_json_is_rejected(self):
