@@ -228,7 +228,7 @@ def gemini_request(prompt: str, api_key: str, model: str, schema: dict[str, Any]
 def summarize_prompt(posts: list[dict[str, str]]) -> str:
     items = [{"post_id": p["post_id"], "text": p["text"]} for p in posts]
     return (
-        "<posts>\\n" + json.dumps(items, ensure_ascii=False) + "\\n</posts>\\n\\n"
+        "<posts>\n" + json.dumps(items, ensure_ascii=False) + "\n</posts>\n\n"
         "На основе постов выше верни JSON по схеме, опираясь на финальный вывод каждого поста."
     )
 
@@ -262,12 +262,12 @@ def rephrase_invalid_summaries(results: dict[str, dict[str, Any]], api_key: str,
         if not item["is_meaningful"] or not needs_summary_rephrase(item["summary"]):
             continue
         prompt = (
-            "<posts>\\n" + json.dumps([{
+            "<posts>\n" + json.dumps([{
                 "post_id": pid,
                 "hidden_mechanism": item.get("hidden_mechanism", ""),
                 "final_takeaway": item.get("final_takeaway", "")
             }], ensure_ascii=False) +
-            "\\n</posts>\\nПереформулируй только summary этой цитаты как самостоятельный инсайт, "
+            "\n</posts>\nПереформулируй только summary этой цитаты как самостоятельный инсайт, "
             "опираясь на hidden_mechanism и final_takeaway. Не начинай с аннотации. "
             "Верни один объект по JSON-схеме."
         )
