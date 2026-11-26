@@ -381,7 +381,12 @@ def prune_quotes(quotes: list[dict[str, Any]], now: datetime) -> list[dict[str, 
 
 def build_updated_data(data: dict[str, Any], additions: list[dict[str, Any]], max_id: int, now: datetime) -> dict[str, Any]:
     updated = dict(data)
-    updated["quotes"] = prune_quotes(deduplicate_quotes(data["quotes"], additions), now)
+    draft_fields = {"hidden_mechanism", "final_takeaway"}
+    old_quotes = [{key: value for key, value in quote.items() if key not in draft_fields}
+                  for quote in data["quotes"]]
+    clean_additions = [{key: value for key, value in quote.items() if key not in draft_fields}
+                       for quote in additions]
+    updated["quotes"] = prune_quotes(deduplicate_quotes(old_quotes, clean_additions), now)
     updated["last_checked_post_id"] = str(max_id)
     updated["updated_at"] = now.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     return updated
