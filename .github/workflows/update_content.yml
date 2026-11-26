@@ -37,7 +37,7 @@ jobs:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           TG_CHANNEL: safin4
           GEMINI_MODEL: gemini-4-hydrogen
-          FORCE_REGENERATE: ${{ inputs.force_regenerate || false }}
+          FORCE_REGENERATE: ${{ inputs.force_regenerate == true && 'true' || 'false' }}
         run: python scripts/update_widget.py
       - name: Commit and push changed data
         run: |
