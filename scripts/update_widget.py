@@ -39,7 +39,13 @@ def is_text_candidate(value: str) -> bool:
 
 
 def normalize_summary(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip().strip('"\'«»“”„‟').strip()
+    value = re.sub(r"\s+", " ", value).strip()
+    quote_chars = '"\'«»“”„‟'
+    while value and value[0] in quote_chars:
+        value = value[1:].lstrip()
+    while value and value[-1] in quote_chars:
+        value = value[:-1].rstrip()
+    return value
 
 
 def parse_channel_html(html: str, channel: str) -> list[dict[str, str]]:
