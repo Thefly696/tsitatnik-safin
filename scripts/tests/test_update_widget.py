@@ -56,7 +56,7 @@ class FilterTests(unittest.TestCase):
 
     def test_summary_cleans_quotes_and_newlines(self):
         self.assertEqual(enforce_summary_limit(' «Первая\n\nстрока.» '), "Первая строка.")
-        self.assertEqual(enforce_summary_limit('\\\"«Смысл мысли.»\\\"'), "Смысл мысли.")
+        self.assertEqual(enforce_summary_limit(' "«Смысл мысли.»" '), "Смысл мысли.")
         self.assertEqual(enforce_summary_limit('"Обычная цитата"'), "Обычная цитата")
 
     def test_summary_accepts_up_to_190_characters(self):
