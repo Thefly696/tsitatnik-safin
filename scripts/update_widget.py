@@ -245,16 +245,25 @@ def summarize_prompt(posts: list[dict[str, str]]) -> str:
 
 
 def normalize_tags(value: Any) -> list[str]:
-    """Keep only allowed tags, preserving model order and removing duplicates."""
+    """Canonicalize model tags, whitelist them, preserve order and cap at two."""
     if not isinstance(value, list):
         return []
+    canonical = {tag.casefold(): tag for tag in ALLOWED_TAGS}
     result: list[str] = []
-    for tag in value:
-        if isinstance(tag, str) and tag in ALLOWED_TAGS and tag not in result:
+    for raw_tag in value:
+        if not isinstance(raw_tag, str):
+            continue
+        cleaned = raw_tag.strip().lstrip("#").strip()
+        tag = canonical.get(cleaned.casefold())
+        if tag and tag not in result:
             result.append(tag)
             if len(result) == 2:
                 break
     return result
+
+
+def is_force_regenerate(value: str | None) -> bool:
+    return (value or "").strip().casefold() in {"true", "1", "yes", "on"}
 
 
 def validate_model_results(items: list[dict[str, Any]], expected: set[str]) -> dict[str, dict[str, Any]]:
@@ -269,6 +278,8 @@ def validate_model_results(items: list[dict[str, Any]], expected: set[str]) -> d
                 or not isinstance(item.get("tags"), list)):
             raise UpdateError(f"Некорректные поля для post_id={pid}")
         item["tags"] = normalize_tags(item["tags"]) if item["is_meaningful"] else []
+        if item["is_meaningful"] and not item["tags"]:
+            raise UpdateError(f"Нет допустимых тематических тегов для post_id={pid}")
         result[pid] = item
     if set(result) != expected:
         raise UpdateError(f"Gemini не вернул все публикации: {sorted(expected - set(result))}")
@@ -313,7 +324,9 @@ def deduplicate_quotes(old: list[dict[str, Any]], new: list[dict[str, Any]]) -> 
     for quote in old + new:
         if not isinstance(quote, dict) or not str(quote.get("post_id", "")).isdigit():
             raise UpdateError("Некорректный post_id цитаты")
-        by_id[str(quote["post_id"])] = quote
+        normalized = dict(quote)
+        normalized["tags"] = normalize_tags(normalized.get("tags", []))
+        by_id[str(normalized["post_id"])] = normalized
     return sorted(by_id.values(), key=lambda q: int(q["post_id"]), reverse=True)
 
 
@@ -380,7 +393,7 @@ def run() -> bool:
     if not channel or not model:
         raise UpdateError("TG_CHANNEL и GEMINI_MODEL не должны быть пустыми")
     data = load_data(DATA_PATH)
-    force_regenerate = os.environ.get("FORCE_REGENERATE", "false").strip().lower() in {"1", "true", "yes", "on"}
+    force_regenerate = is_force_regenerate(os.environ.get("FORCE_REGENERATE"))
     if force_regenerate:
         print("[Update] FORCE_REGENERATE=true: игнорируем старые quotes и last_checked_post_id.")
         data = dict(data)
