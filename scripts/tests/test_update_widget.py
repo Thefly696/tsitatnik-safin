@@ -269,7 +269,7 @@ class FeedTests(unittest.TestCase):
         fetch_mock.return_value = (posts, 14)
 
         def generate(prompt, _key, _model, _schema):
-            payload = json.loads(prompt.split("<posts>\\n", 1)[1].split("\\n</posts>", 1)[0])
+            payload = json.loads(prompt.split("<posts>\n", 1)[1].split("\n</posts>", 1)[0])
             return [{
                 "post_id": item["post_id"], "is_meaningful": True,
                 "hidden_mechanism": "Скрытая причина",
