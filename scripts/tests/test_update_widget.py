@@ -191,7 +191,9 @@ class FeedTests(unittest.TestCase):
         metadata = {"latest_version_code": 7, "latest_version_name": "1.2.3",
                     "download_url": "https://example.test/release.apk"}
         original = {"schema_version": 1, "last_checked_post_id": "10",
-                    "updated_at": "2026-11-25T00:00:00Z", "app_update": metadata, "quotes": []}
+                    "updated_at": "2026-11-25T00:00:00Z", "app_update": metadata,
+                    "quotes": [{"post_id": "10", "published_at": "2026-11-25T10:00:00Z",
+                                "summary": "Старая цитата"}]}
         now = datetime(2026, 11, 25, 12, 0, tzinfo=timezone.utc)
         updated = build_updated_data(original, [
             {"post_id": "11", "published_at": "2026-11-25T11:00:00Z", "summary": "Смысл",
