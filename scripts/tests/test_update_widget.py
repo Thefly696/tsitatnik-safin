@@ -100,6 +100,7 @@ class GeminiTests(unittest.TestCase):
         config = args["json"]["generationConfig"]
         self.assertEqual(config["thinkingConfig"], {"thinkingLevel": "low"})
         self.assertEqual(config["responseMimeType"], "application/json")
+        self.assertIn("systemInstruction", args["json"])
         self.assertIn("responseSchema", config)
         for key in ("temperature", "topP", "topK", "thinkingBudget"):
             self.assertNotIn(key, config)
@@ -139,6 +140,9 @@ class GeminiTests(unittest.TestCase):
                           for call in post_mock.call_args_list], ["test-key"] * 4)
         self.assertEqual([call.kwargs["json"]["generationConfig"].get("thinkingConfig")
                           for call in post_mock.call_args_list][-1], None)
+        fallback_config = post_mock.call_args_list[-1].kwargs["json"]["generationConfig"]
+        self.assertEqual(fallback_config["temperature"], 0.25)
+        self.assertNotIn("thinkingConfig", fallback_config)
         self.assertEqual([call.args[0] for call in sleep_mock.call_args_list], [5, 15])
 
     def test_tags_are_normalized_filtered_deduplicated_and_limited_to_two(self):
@@ -153,9 +157,48 @@ class GeminiTests(unittest.TestCase):
         self.assertEqual(app.normalize_tags(["Посторонний", None, "Семья"]), ["Семья"])
         self.assertEqual(app.RESULT_SCHEMA["items"]["properties"]["tags"]["type"], "ARRAY")
         self.assertIn("tags", app.RESULT_SCHEMA["items"]["required"])
+        self.assertEqual(app.RESULT_SCHEMA["items"]["propertyOrdering"], [
+            "post_id", "is_meaningful", "hidden_mechanism", "final_takeaway", "summary", "tags"
+        ])
+        self.assertEqual(app.RESULT_SCHEMA["items"]["required"], app.RESULT_SCHEMA["items"]["propertyOrdering"])
         prompt = app.summarize_prompt([{"post_id": "1", "text": "Содержательный текст"}])
         for tag in app.ALLOWED_TAGS:
             self.assertIn(tag, prompt)
+
+    @patch.object(app.time, "sleep")
+    @patch.object(app.requests, "post")
+    def test_gemini_3_uses_temperature_without_thinking_config(self, post_mock, _sleep_mock):
+        success = type("Response", (), {
+            "status_code": 200, "raise_for_status": lambda self: None,
+            "json": lambda self: {"candidates": [{"content": {"parts": [{"text": "[]"}]}}]},
+        })()
+        post_mock.return_value = success
+        self.assertEqual(app.gemini_request("prompt", "secret", "gemini-3.5-flash-lite",
+                                            app.RESULT_SCHEMA), [])
+        config = post_mock.call_args.kwargs["json"]["generationConfig"]
+        self.assertEqual(config["temperature"], 0.25)
+        self.assertNotIn("thinkingConfig", config)
+
+    @patch.object(app, "gemini_request")
+    def test_annotation_prefix_triggers_one_targeted_rephrase(self, request_mock):
+        result = {"7": {"post_id": "7", "is_meaningful": True,
+                        "hidden_mechanism": "Страх отвержения заставляет идеализировать партнёра.",
+                        "final_takeaway": "Признавайте реальность отношений.",
+                        "summary": "Пример того, как человек идеализирует партнёра.",
+                        "tags": ["Отношения"]}}
+        request_mock.return_value = [{"post_id": "7", "summary": "Идеализация скрывает страх отвержения, поэтому важно видеть реального партнёра."}]
+        self.assertTrue(app.needs_summary_rephrase(result["7"]["summary"]))
+        app.rephrase_invalid_summaries(result, "secret", "gemini-4-hydrogen")
+        self.assertEqual(request_mock.call_count, 1)
+        self.assertIn("hidden_mechanism", request_mock.call_args.args[0])
+        self.assertEqual(result["7"]["summary"],
+                         "Идеализация скрывает страх отвержения, поэтому важно видеть реального партнёра.")
+
+    def test_user_prompt_wraps_posts_before_final_instruction(self):
+        prompt = app.summarize_prompt([{"post_id": "1", "text": "Содержание поста"}])
+        self.assertTrue(prompt.startswith("<posts>"))
+        self.assertTrue(prompt.endswith("На основе постов выше верни JSON по схеме, опираясь на финальный вывод каждого поста."))
+
 
     def test_meaningful_result_without_allowed_tags_is_rejected(self):
         item = {"post_id": "1", "is_meaningful": True, "summary": "Текст",
