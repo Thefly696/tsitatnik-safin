@@ -141,9 +141,22 @@ class GeminiTests(unittest.TestCase):
                           for call in post_mock.call_args_list][-1], None)
         self.assertEqual([call.args[0] for call in sleep_mock.call_args_list], [5, 15])
 
+    def test_tags_are_filtered_deduplicated_and_limited_to_two(self):
+        meaningful = {"post_id": "1", "is_meaningful": True, "summary": "Текст",
+                      "tags": ["Тревога", "Неизвестный тег", "Тревога", "Выбор", "Семья"]}
+        rejected = {"post_id": "2", "is_meaningful": False, "summary": "",
+                    "tags": ["Отношения"]}
+        result = validate_model_results([meaningful, rejected], {"1", "2"})
+        self.assertEqual(result["1"]["tags"], ["Тревога", "Выбор"])
+        self.assertEqual(result["2"]["tags"], [])
+        self.assertEqual(app.RESULT_SCHEMA["items"]["properties"]["tags"]["type"], "ARRAY")
+        prompt = app.summarize_prompt([{"post_id": "1", "text": "Содержательный текст"}])
+        for tag in app.ALLOWED_TAGS:
+            self.assertIn(tag, prompt)
+
     def test_model_results_are_complete_and_unique(self):
-        a = {"post_id": "1", "is_meaningful": True, "summary": "Текст"}
-        b = {"post_id": "2", "is_meaningful": False, "summary": ""}
+        a = {"post_id": "1", "is_meaningful": True, "summary": "Текст", "tags": ["Эмоции"]}
+        b = {"post_id": "2", "is_meaningful": False, "summary": "", "tags": []}
         self.assertEqual(set(validate_model_results([a, b], {"1", "2"})), {"1", "2"})
         for items in ([a], [a, {**b, "post_id": "3"}], [a, a]):
             with self.subTest(items=items), self.assertRaises(UpdateError):

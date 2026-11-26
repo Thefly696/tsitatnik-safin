@@ -16,6 +16,7 @@ URL_RE = re.compile(r"https?://\S+", re.I)
 MENTION_RE = re.compile(r"(?<!\w)@[A-Za-z0-9_]{2,}")
 HASHTAG_RE = re.compile(r"(?<!\w)#[^\s#]+")
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
+ALLOWED_TAGS = ["Границы", "Отношения", "Семья", "Тревога", "Самооценка", "Эмоции", "Ответственность", "Выбор", "Зависимость", "Осознанность"]
 
 
 class UpdateError(RuntimeError):
@@ -127,8 +128,9 @@ def fetch_posts(channel: str, data: dict[str, Any], now: datetime) -> tuple[list
 
 
 RESULT_SCHEMA = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {
-    "post_id": {"type": "STRING"}, "is_meaningful": {"type": "BOOLEAN"}, "summary": {"type": "STRING"}},
-    "required": ["post_id", "is_meaningful", "summary"]}}
+    "post_id": {"type": "STRING"}, "is_meaningful": {"type": "BOOLEAN"}, "summary": {"type": "STRING"},
+    "tags": {"type": "ARRAY", "items": {"type": "STRING"}}},
+    "required": ["post_id", "is_meaningful", "summary", "tags"]}}
 SHORTEN_SCHEMA = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {
     "post_id": {"type": "STRING"}, "summary": {"type": "STRING"}}, "required": ["post_id", "summary"]}}
 
@@ -215,10 +217,12 @@ def gemini_request(prompt: str, api_key: str, model: str, schema: dict[str, Any]
 
 def summarize_prompt(posts: list[dict[str, str]]) -> str:
     rules = (
-        "Для каждого поста верни ровно один объект с post_id, is_meaningful и summary. "
+        "Для каждого поста верни ровно один объект с post_id, is_meaningful, summary и tags. "
         "Оценивай содержание, а не форму публикации. is_meaningful=false для рекламы, анонсов очных и онлайн-курсов, "
         "вебинаров, наборов на обучение, организационных объявлений и ссылок на видео/стримы без самостоятельной мысли. "
         "Для содержательных психологических публикаций is_meaningful=true. "
+        "Для is_meaningful=true выбери строго 1–2 наиболее подходящих тега из фиксированного словаря: ["Границы", "Отношения", "Семья", "Тревога", "Самооценка", "Эмоции", "Ответственность", "Выбор", "Зависимость", "Осознанность"]. "
+        "Не изменяй написание тегов, не создавай синонимы и новые категории; для is_meaningful=false верни tags: []. "
         "ГЛАВНАЯ ЗАДАЧА: извлеки главный психологический инсайт или жизненное правило, которое читателю стоит осмыслить. "
         "Не пересказывай содержание и не описывай, о чём публикация. "
         "Если перед тобой история, притча, диалог, бытовая ситуация или метафора, не пересказывай сюжет и не называй его формой; "
@@ -233,11 +237,24 @@ def summarize_prompt(posts: list[dict[str, str]]) -> str:
         "Пример нужного стиля: «Попытка заранее прожить будущую потерю не защищает от боли — "
         "она просто крадёт радость у сегодняшнего дня». "
         "summary — на русском языке, не более 190 символов, без Markdown, эмодзи, хештегов и внешних кавычек. "
-        "Не добавляй фактов. Для is_meaningful=false верни пустую строку summary. "
+        "Не добавляй фактов. Для is_meaningful=false верни пустую строку summary и пустой массив tags. "
         "Каждый post_id верни ровно один раз."
     )
     items = [{"post_id": p["post_id"], "text": p["text"]} for p in posts]
     return rules + "\n\nПубликации:\n" + json.dumps(items, ensure_ascii=False)
+
+
+def normalize_tags(value: Any) -> list[str]:
+    """Keep only allowed tags, preserving model order and removing duplicates."""
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for tag in value:
+        if isinstance(tag, str) and tag in ALLOWED_TAGS and tag not in result:
+            result.append(tag)
+            if len(result) == 2:
+                break
+    return result
 
 
 def validate_model_results(items: list[dict[str, Any]], expected: set[str]) -> dict[str, dict[str, Any]]:
@@ -248,8 +265,10 @@ def validate_model_results(items: list[dict[str, Any]], expected: set[str]) -> d
         pid = str(item.get("post_id", ""))
         if pid not in expected or pid in result:
             raise UpdateError(f"Неожиданный или повторный post_id: {pid}")
-        if not isinstance(item.get("is_meaningful"), bool) or not isinstance(item.get("summary"), str):
+        if (not isinstance(item.get("is_meaningful"), bool) or not isinstance(item.get("summary"), str)
+                or not isinstance(item.get("tags"), list)):
             raise UpdateError(f"Некорректные поля для post_id={pid}")
+        item["tags"] = normalize_tags(item["tags"]) if item["is_meaningful"] else []
         result[pid] = item
     if set(result) != expected:
         raise UpdateError(f"Gemini не вернул все публикации: {sorted(expected - set(result))}")
@@ -386,7 +405,7 @@ def run() -> bool:
             if item["is_meaningful"] and summary:
                 post = by_id[pid]
                 additions.append({"post_id": pid, "published_at": post["published_at"],
-                                  "source_url": post["source_url"], "summary": summary})
+                                  "source_url": post["source_url"], "summary": summary, "tags": item["tags"]})
         if backfill and offset + size < len(posts):
             time.sleep(5)
 
