@@ -73,7 +73,9 @@ class FilterTests(unittest.TestCase):
         self.assertIn("summary", app.SYSTEM_INSTRUCTION)
         self.assertIn("Читай пост до последнего абзаца", app.SYSTEM_INSTRUCTION)
         self.assertIn("до 185 символов", app.SYSTEM_INSTRUCTION)
-        self.assertIn("Пример", app.SYSTEM_INSTRUCTION)
+        self.assertIn("в финале", app.SYSTEM_INSTRUCTION)
+        self.assertIn("финальных абзацев", app.SYSTEM_INSTRUCTION)
+        self.assertIn("без упоминания поста, текста или автора", app.SYSTEM_INSTRUCTION)
 
     def test_summary_limit_and_whole_word_truncation(self):
         result = enforce_summary_limit("слово " * 40)
