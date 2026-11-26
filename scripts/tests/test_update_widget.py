@@ -56,15 +56,29 @@ class FilterTests(unittest.TestCase):
 
     def test_summary_cleans_quotes_and_newlines(self):
         self.assertEqual(enforce_summary_limit(' «Первая\n\nстрока.» '), "Первая строка.")
+        self.assertEqual(enforce_summary_limit('\\\"«Смысл мысли.»\\\"'), "Смысл мысли.")
+        self.assertEqual(enforce_summary_limit('"Обычная цитата"'), "Обычная цитата")
+
+    def test_summary_accepts_up_to_190_characters(self):
+        self.assertEqual(len(enforce_summary_limit("я" * 190)), 190)
+
+    def test_prompt_requires_insight_not_plot_description(self):
+        prompt = app.summarize_prompt([{"post_id": "1", "text": "История о выборе и ответственности."}])
+        self.assertIn("извлеки главный психологический инсайт", prompt)
+        self.assertIn("не пересказывай сюжет", prompt)
+        self.assertIn("не более 190 символов", prompt)
+        self.assertIn("СТРОГО ЗАПРЕЩЕНЫ", prompt)
 
     def test_summary_limit_and_whole_word_truncation(self):
         result = enforce_summary_limit("слово " * 40)
-        self.assertLessEqual(len(result), 160)
+        self.assertLessEqual(len(result), 190)
         self.assertTrue(result.endswith("…"))
         self.assertFalse(result.endswith("сло…"))
 
     def test_long_single_word_is_bounded(self):
-        self.assertEqual(len(enforce_summary_limit("я" * 200)), 160)
+        result = enforce_summary_limit("я" * 200)
+        self.assertEqual(len(result), 190)
+        self.assertEqual(result[-1], "…")
 
 
 class GeminiTests(unittest.TestCase):
@@ -180,6 +194,33 @@ class JsonSafetyTests(unittest.TestCase):
             path.write_text("{broken", encoding="utf-8")
             with self.assertRaises(UpdateError):
                 load_data(path)
+
+    @patch.object(app, "gemini_request", side_effect=UpdateError("Gemini unavailable"))
+    @patch.object(app, "fetch_posts")
+    def test_force_regenerate_ignores_old_feed_and_preserves_json_on_api_error(self, fetch_mock, _gemini_mock):
+        original = {
+            "schema_version": 1, "last_checked_post_id": "987",
+            "updated_at": "2026-11-25T00:00:00Z",
+            "app_update": {"latest_version_code": 3, "latest_version_name": "1.2.0"},
+            "quotes": [{"post_id": "987", "published_at": "2026-11-25T00:00:00Z",
+                        "source_url": "https://t.me/safin4/987", "summary": "Старая цитата"}],
+        }
+        post = {"post_id": "1000", "published_at": "2026-11-26T00:00:00Z",
+                "source_url": "https://t.me/safin4/1000", "text": "Содержательный текст публикации " * 4}
+        fetch_mock.return_value = ([post], 1000)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "widget_data.json"
+            path.write_text(json.dumps(original, ensure_ascii=False), encoding="utf-8")
+            before = path.read_bytes()
+            with patch.object(app, "DATA_PATH", path), patch.dict("os.environ", {
+                "LLM_API_KEY": "test-key", "FORCE_REGENERATE": "true"
+            }):
+                with self.assertRaises(UpdateError):
+                    app.run()
+            passed_data = fetch_mock.call_args.args[1]
+            self.assertEqual(passed_data["quotes"], [])
+            self.assertEqual(passed_data["last_checked_post_id"], "0")
+            self.assertEqual(path.read_bytes(), before)
 
     @patch.object(app, "fetch_posts", side_effect=RuntimeError("network error"))
     def test_network_failure_does_not_overwrite_json(self, _mock):
