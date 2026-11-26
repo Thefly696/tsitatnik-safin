@@ -67,7 +67,7 @@ class FilterTests(unittest.TestCase):
         self.assertIn("<posts>", prompt)
         self.assertIn("финальному выводу каждого поста", prompt)
         self.assertIn("извлечь из каждого поста главную мысль", app.SYSTEM_INSTRUCTION)
-        self.assertIn("не пересказывай", app.SYSTEM_INSTRUCTION)
+        self.assertIn("Читай пост до последнего абзаца", app.SYSTEM_INSTRUCTION)
         self.assertIn("до 185 символов", app.SYSTEM_INSTRUCTION)
         self.assertIn("Пример", app.SYSTEM_INSTRUCTION)
 
@@ -148,10 +148,10 @@ class GeminiTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in sleep_mock.call_args_list], [5, 15])
 
     def test_tags_are_normalized_filtered_deduplicated_and_limited_to_two(self):
-        meaningful = {"post_id": "1", "is_meaningful": True, "summary": "Текст",
-                      "tags": [" #Границы ", "отношения", "НЕИЗВЕСТНЫЙ", "ГРАНИЦЫ", "Семья"]}
-        rejected = {"post_id": "2", "is_meaningful": False, "summary": "",
-                    "tags": ["Отношения"]}
+        meaningful = {"post_id": "1", "is_meaningful": True, "hidden_mechanism": "Причина",
+                      "final_takeaway": "Вывод", "summary": "Текст", "tags": [" #Границы ", "отношения", "НЕИЗВЕСТНЫЙ", "ГРАНИЦЫ", "Семья"]}
+        rejected = {"post_id": "2", "is_meaningful": False, "hidden_mechanism": "",
+                    "final_takeaway": "", "summary": "", "tags": ["Отношения"]}
         result = validate_model_results([meaningful, rejected], {"1", "2"})
         self.assertEqual(result["1"]["tags"], ["Границы", "Отношения"])
         self.assertEqual(result["2"]["tags"], [])
@@ -209,8 +209,10 @@ class GeminiTests(unittest.TestCase):
             validate_model_results([item], {"1"})
 
     def test_model_results_are_complete_and_unique(self):
-        a = {"post_id": "1", "is_meaningful": True, "summary": "Текст", "tags": ["Эмоции"]}
-        b = {"post_id": "2", "is_meaningful": False, "summary": "", "tags": []}
+        a = {"post_id": "1", "is_meaningful": True, "hidden_mechanism": "Причина",
+             "final_takeaway": "Вывод", "summary": "Текст", "tags": ["Эмоции"]}
+        b = {"post_id": "2", "is_meaningful": False, "hidden_mechanism": "",
+             "final_takeaway": "", "summary": "", "tags": []}
         self.assertEqual(set(validate_model_results([a, b], {"1", "2"})), {"1", "2"})
         for items in ([a], [a, {**b, "post_id": "3"}], [a, a]):
             with self.subTest(items=items), self.assertRaises(UpdateError):
