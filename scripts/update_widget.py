@@ -16,6 +16,7 @@ URL_RE = re.compile(r"https?://\S+", re.I)
 MENTION_RE = re.compile(r"(?<!\w)@[A-Za-z0-9_]{2,}")
 HASHTAG_RE = re.compile(r"(?<!\w)#[^\s#]+")
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
+SYSTEM_INSTRUCTION = "<role>\nТы редактор сборника практической психологии. Твоя задача — извлечь из каждого поста главную мысль для осмысления, сохранив авторскую глубину и вывод.\n</role>\n\n<rules>\n1. Отбор (is_meaningful): ставь true только если в посте есть самостоятельная психологическая идея. Ставь false для рекламы, анонсов курсов, оргпостов и пустых ссылок.\n2. Читай пост до последнего абзаца: главная развязка и практический вывод автора почти всегда находятся в финале, а не в начале.\n3. Сначала заполни служебные поля-черновики по порядку:\n   - hidden_mechanism: назови скрытую психологическую причину или иллюзию из середины/конца текста (1 короткая фраза).\n   - final_takeaway: выпиши главный вывод или ориентир из финальных абзацев (1 короткая фраза).\n4. Затем напиши summary (1–2 законченных предложения, строго до 185 символов), соединив hidden_mechanism и final_takeaway в цельный афоризм:\n   - Пиши от лица самой мысли (прямое утверждение с глаголом, без упоминания поста, текста или автора).\n   - Используй ясный живой русский язык без канцеляризмов и без кавычек вокруг текста.\n   - Сохраняй смысл оригинала, не выдумывай факты, которых нет в посте.\n5. Теги (tags): выбери 1–2 наиболее точных тега строго из списка:\n   Границы, Отношения, Семья, Тревога, Самооценка, Эмоции, Ответственность, Выбор, Зависимость, Осознанность.\n</rules>\n\n<examples>\n<example>\n<post>\nКогда возникает сильное чувство, в воображении уже строится совместное будущее, и туда вкладывается огромная жизненная энергия. При отказе рушится целый мир. Попытки быстро переключиться лишь усиливают напряжение. Человек реагирует на потерю той версии будущего, куда вложил силы. Когда боль признаётся нормальной частью процесса, появляется возможность постепенно вернуть силы в свою жизнь.\n</post>\n<output>\n{\n  \"post_id\": \"101\",\n  \"is_meaningful\": true,\n  \"hidden_mechanism\": \"При отказе человек оплакивает не столько другого, сколько вложенную в воображаемое будущее энергию.\",\n  \"final_takeaway\": \"Признание боли закономерной позволяет постепенно вернуть внимание и силы в собственную жизнь.\",\n  \"summary\": \"При отказе мы оплакиваем не человека, а вложенную в образ будущего энергию. Признавая эту боль закономерной, мы даём себе время вернуть силы в собственную жизнь.\",\n  \"tags\": [\"Отношения\", \"Эмоции\"]\n}\n</output>\n</example>\n\n<example>\n<post>\nВчера клиентка рассказала, как 10 лет молча мыла посуду за мужем, обижалась, а потом срывалась из-за забытого хлеба. Ей казалось, что он сам должен догадаться. Но пока мы ждём, что близкие угадают наши желания, мы общаемся не с реальным человеком, а со своей фантазией, и сами лишаем его шанса услышать нас.\n</post>\n<output>\n{\n  \"post_id\": \"102\",\n  \"is_meaningful\": true,\n  \"hidden_mechanism\": \"Ожидание, что близкий сам угадает желания, подменяет живого человека фантазией и копит скрытую обиду.\",\n  \"final_takeaway\": \"Прямой разговор даёт партнёру реальный шанс услышать вас вместо молчаливых претензий.\",\n  \"summary\": \"Пока мы ждём, что близкие сами угадают наши желания, мы общаемся со своей фантазией и лишаем реального человека шанса нас услышать.\",\n  \"tags\": [\"Отношения\", \"Границы\"]\n}\n</output>\n</example>\n</examples>"
 ALLOWED_TAGS = ["Границы", "Отношения", "Семья", "Тревога", "Самооценка", "Эмоции", "Ответственность", "Выбор", "Зависимость", "Осознанность"]
 
 
@@ -127,10 +128,16 @@ def fetch_posts(channel: str, data: dict[str, Any], now: datetime) -> tuple[list
     return sorted(found.values(), key=lambda p: int(p["post_id"])), max_id
 
 
-RESULT_SCHEMA = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {
-    "post_id": {"type": "STRING"}, "is_meaningful": {"type": "BOOLEAN"}, "summary": {"type": "STRING"},
-    "tags": {"type": "ARRAY", "items": {"type": "STRING"}}},
-    "required": ["post_id", "is_meaningful", "summary", "tags"]}}
+RESULT_SCHEMA = {"type": "ARRAY", "items": {"type": "OBJECT", "propertyOrdering": [
+    "post_id", "is_meaningful", "hidden_mechanism", "final_takeaway", "summary", "tags"
+], "properties": {
+    "post_id": {"type": "STRING"},
+    "is_meaningful": {"type": "BOOLEAN"},
+    "hidden_mechanism": {"type": "STRING", "description": "Скрытая психологическая причина или иллюзия из текста, до 120 символов; пусто если is_meaningful=false"},
+    "final_takeaway": {"type": "STRING", "description": "Главный практический вывод из финальных абзацев поста, до 120 символов; пусто если is_meaningful=false"},
+    "summary": {"type": "STRING", "description": "Итоговый самостоятельный инсайт (1–2 предложения, до 185 символов), соединяющий hidden_mechanism и final_takeaway; без кавычек"},
+    "tags": {"type": "ARRAY", "items": {"type": "STRING"}}
+}, "required": ["post_id", "is_meaningful", "hidden_mechanism", "final_takeaway", "summary", "tags"]}}
 SHORTEN_SCHEMA = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {
     "post_id": {"type": "STRING"}, "summary": {"type": "STRING"}}, "required": ["post_id", "summary"]}}
 
@@ -165,6 +172,7 @@ def gemini_request(prompt: str, api_key: str, model: str, schema: dict[str, Any]
 
     for model_id in model_chain:
         payload = {
+            "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
                 "responseMimeType": "application/json",
@@ -173,6 +181,8 @@ def gemini_request(prompt: str, api_key: str, model: str, schema: dict[str, Any]
         }
         if model_id.startswith("gemini-4-"):
             payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "low"}
+        else:
+            payload["generationConfig"]["temperature"] = 0.25
 
         for attempt in range(3):
             try:
@@ -216,32 +226,57 @@ def gemini_request(prompt: str, api_key: str, model: str, schema: dict[str, Any]
     ) from last_error
 
 def summarize_prompt(posts: list[dict[str, str]]) -> str:
-    rules = (
-        "Для каждого поста верни ровно один объект с post_id, is_meaningful, summary и tags. "
-        "Оценивай содержание, а не форму публикации. is_meaningful=false для рекламы, анонсов очных и онлайн-курсов, "
-        "вебинаров, наборов на обучение, организационных объявлений и ссылок на видео/стримы без самостоятельной мысли. "
-        "Для содержательных психологических публикаций is_meaningful=true. "
-        f"Для is_meaningful=true выбери строго 1–2 наиболее подходящих тега из фиксированного словаря: {json.dumps(ALLOWED_TAGS, ensure_ascii=False)}. "
-        "Не изменяй написание тегов, не создавай синонимы и новые категории; для is_meaningful=false верни tags: []. "
-        "ГЛАВНАЯ ЗАДАЧА: извлеки главный психологический инсайт или жизненное правило, которое читателю стоит осмыслить. "
-        "Не пересказывай содержание и не описывай, о чём публикация. "
-        "Если перед тобой история, притча, диалог, бытовая ситуация или метафора, не пересказывай сюжет и не называй его формой; "
-        "сформулируй самостоятельный глубокий вывод, ради которого приведена эта история. "
-        "Преобразуй частный случай в точное, применимое к жизни наблюдение, но не добавляй идей, которых нет в исходном тексте. "
-        "Формулировка должна звучать как законченная мудрая и практичная мысль, а не аннотация, заголовок или описание материала. "
-        "Обязательны 1–2 цельных законченных предложения с глаголом. "
-        "СТРОГО ЗАПРЕЩЕНЫ слова и конструкции-аннотации в начале И в любой части summary: "
-        "«Пример», «Иллюстрация», «Метафора», «Разница между», «Разбор», «Объяснение», «Мысль о», "
-        "«В этом посте», «Автор», а также любые назывные заголовки без глагола. "
-        "Не начинай с названия темы или описания приёма; сразу сформулируй вывод. "
-        "Пример нужного стиля: «Попытка заранее прожить будущую потерю не защищает от боли — "
-        "она просто крадёт радость у сегодняшнего дня». "
-        "summary — на русском языке, не более 190 символов, без Markdown, эмодзи, хештегов и внешних кавычек. "
-        "Не добавляй фактов. Для is_meaningful=false верни пустую строку summary и пустой массив tags. "
-        "Каждый post_id верни ровно один раз."
-    )
     items = [{"post_id": p["post_id"], "text": p["text"]} for p in posts]
-    return rules + "\n\nПубликации:\n" + json.dumps(items, ensure_ascii=False)
+    return (
+        "<posts>\\n" + json.dumps(items, ensure_ascii=False) + "\\n</posts>\\n\\n"
+        "На основе постов выше верни JSON по схеме, опираясь на финальный вывод каждого поста."
+    )
+
+
+REPHRASE_SCHEMA = {"type": "ARRAY", "items": {"type": "OBJECT", "propertyOrdering": [
+    "post_id", "hidden_mechanism", "final_takeaway", "summary"
+], "properties": {
+    "post_id": {"type": "STRING"},
+    "hidden_mechanism": {"type": "STRING"},
+    "final_takeaway": {"type": "STRING"},
+    "summary": {"type": "STRING"}
+}, "required": ["post_id", "hidden_mechanism", "final_takeaway", "summary"]}}
+
+
+ANNOTATION_PREFIXES = (
+    "Пример", "Иллюстрация", "Метафора", "Разница между", "Разбор",
+    "Объяснение", "Мысль о", "В этом посте", "Автор"
+)
+
+
+def needs_summary_rephrase(summary: str) -> bool:
+    normalized = normalize_summary(summary)
+    return (len(normalized) > 190 or
+            any(normalized.casefold().startswith(prefix.casefold())
+                for prefix in ANNOTATION_PREFIXES))
+
+
+def rephrase_invalid_summaries(results: dict[str, dict[str, Any]], api_key: str, model: str) -> None:
+    """Make one targeted correction request per annotated or overlong quote."""
+    for pid, item in results.items():
+        if not item["is_meaningful"] or not needs_summary_rephrase(item["summary"]):
+            continue
+        prompt = (
+            "<posts>\\n" + json.dumps([{
+                "post_id": pid,
+                "hidden_mechanism": item.get("hidden_mechanism", ""),
+                "final_takeaway": item.get("final_takeaway", "")
+            }], ensure_ascii=False) +
+            "\\n</posts>\\nПереформулируй только summary этой цитаты как самостоятельный инсайт, "
+            "опираясь на hidden_mechanism и final_takeaway. Не начинай с аннотации. "
+            "Верни один объект по JSON-схеме."
+        )
+        corrected = gemini_request(prompt, api_key, model, REPHRASE_SCHEMA)
+        if (len(corrected) != 1 or not isinstance(corrected[0], dict)
+                or str(corrected[0].get("post_id", "")) != pid
+                or not isinstance(corrected[0].get("summary"), str)):
+            raise UpdateError(f"Некорректный повторный ответ для post_id={pid}")
+        item["summary"] = normalize_summary(corrected[0]["summary"])
 
 
 def normalize_tags(value: Any) -> list[str]:
@@ -275,7 +310,9 @@ def validate_model_results(items: list[dict[str, Any]], expected: set[str]) -> d
         if pid not in expected or pid in result:
             raise UpdateError(f"Неожиданный или повторный post_id: {pid}")
         if (not isinstance(item.get("is_meaningful"), bool) or not isinstance(item.get("summary"), str)
-                or not isinstance(item.get("tags"), list)):
+                or not isinstance(item.get("tags"), list)
+                or not isinstance(item.get("hidden_mechanism"), str)
+                or not isinstance(item.get("final_takeaway"), str)):
             raise UpdateError(f"Некорректные поля для post_id={pid}")
         item["tags"] = normalize_tags(item["tags"]) if item["is_meaningful"] else []
         if item["is_meaningful"] and not item["tags"]:
@@ -406,11 +443,14 @@ def run() -> bool:
         return False
 
     backfill = not data["quotes"] and str(data.get("last_checked_post_id", "0")) == "0"
-    size, additions = (5 if backfill else len(posts)), []
+    fallback_chain = build_model_chain(model)
+    uses_flash_lite_fallback = any("flash-lite" in model_id for model_id in fallback_chain[1:])
+    size, additions = (2 if backfill and uses_flash_lite_fallback else 5 if backfill else len(posts)), []
     for offset in range(0, len(posts), size):
         batch = posts[offset:offset + size]
         results = validate_model_results(gemini_request(summarize_prompt(batch), key, model, RESULT_SCHEMA),
                                          {p["post_id"] for p in batch})
+        rephrase_invalid_summaries(results, key, model)
         shorten_summaries(results, key, model)
         by_id = {p["post_id"]: p for p in batch}
         for pid, item in results.items():
