@@ -333,7 +333,7 @@ class JsonSafetyTests(unittest.TestCase):
                 patch.dict("os.environ", env),
             ):
                 def generate(prompt, *_):
-                    payload = json.loads(prompt.split("<posts>\\n", 1)[1].split("\\n</posts>", 1)[0])
+                    payload = json.loads(prompt.split("<posts>\n", 1)[1].split("\n</posts>", 1)[0])
                     return [{"post_id": p["post_id"], "is_meaningful": True, "hidden_cause": "Причина",
                              "final_takeaway": "Вывод", "summary": "Новая самостоятельная мысль меняет привычную реакцию.",
                              "tags": ["Осознанность"]} for p in payload]
