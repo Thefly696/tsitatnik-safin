@@ -322,10 +322,16 @@ class JsonSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "widget_data.json"
             path.write_text(json.dumps(original, ensure_ascii=False), encoding="utf-8")
-            with patch.object(app, "DATA_PATH", path), patch.object(app, "fetch_posts", return_value=(posts, 99)), \\
-                 patch.object(app, "gemini_request") as mock, patch.object(app.time, "sleep"), \\
-                 patch.dict("os.environ", {"LLM_API_KEY": "test-key", "FORCE_REGENERATE": "true",
-                     "OVERWRITE_LOCKED": "true" if overwrite else "false", "LOCKED_MODELS": "gemini-4-hydrogen"}):
+            env = {"LLM_API_KEY": "test-key", "FORCE_REGENERATE": "true",
+                   "OVERWRITE_LOCKED": "true" if overwrite else "false",
+                   "LOCKED_MODELS": "gemini-4-hydrogen"}
+            with (
+                patch.object(app, "DATA_PATH", path),
+                patch.object(app, "fetch_posts", return_value=(posts, 99)),
+                patch.object(app, "gemini_request") as mock,
+                patch.object(app.time, "sleep"),
+                patch.dict("os.environ", env),
+            ):
                 def generate(prompt, *_):
                     payload = json.loads(prompt.split("<posts>\\n", 1)[1].split("\\n</posts>", 1)[0])
                     return [{"post_id": p["post_id"], "is_meaningful": True, "hidden_cause": "Причина",

@@ -457,7 +457,7 @@ def run() -> bool:
     locked_models = configured_locked_models()
     locked_quotes = {str(q["post_id"]): q for q in data["quotes"]
                      if isinstance(q, dict) and is_locked_quote(q, locked_models)}
-    protected_count = len(locked_quotes) if force_regenerate and not overwrite_locked else 0
+    protected_count = len(locked_quotes) if not overwrite_locked else 0
     fetch_data = data
     if force_regenerate:
         print("[Update] FORCE_REGENERATE=true: проверяем ленту за 30 дней.")
@@ -491,11 +491,17 @@ def run() -> bool:
             if item["is_meaningful"] and summary:
                 post = by_id[pid]
                 additions.append({"post_id": pid, "published_at": post["published_at"],
-                    "source_url": post["source_url"], "summary": summary,
-                    "tags": item["tags"], "generated_by": generated_by})
+                    "source_url": post["source_url"], "generated_at": now.isoformat(timespec="seconds").replace("+00:00", "Z"),
+                    "summary": summary, "tags": item["tags"], "generated_by": generated_by})
         if backfill and offset + size < len(posts):
             time.sleep(5)
     updated = build_updated_data(data, additions, max_checked, now)
+    if force_regenerate and not overwrite_locked:
+        by_id = {q["post_id"]: q for q in updated["quotes"]}
+        for pid, quote in locked_quotes.items():
+            if pid in by_id:
+                by_id[pid].clear()
+                by_id[pid].update(quote)
     atomic_write_json(DATA_PATH, updated)
     print(f"Обработано {len(posts)} постов; добавлено/обновлено цитат: {len(additions)}; защищено: {protected_count}.")
     return True
