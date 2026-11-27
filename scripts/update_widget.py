@@ -495,7 +495,11 @@ def run() -> bool:
                     "summary": summary, "tags": item["tags"], "generated_by": generated_by})
         if backfill and offset + size < len(posts):
             time.sleep(5)
-    updated = build_updated_data(data, additions, max_checked, now)
+    update_base = data
+    if force_regenerate:
+        update_base = dict(data)
+        update_base["quotes"] = list(locked_quotes.values()) if not overwrite_locked else []
+    updated = build_updated_data(update_base, additions, max_checked, now)
     if force_regenerate and not overwrite_locked:
         by_id = {q["post_id"]: q for q in updated["quotes"]}
         for pid, quote in locked_quotes.items():
