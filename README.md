@@ -66,7 +66,7 @@ Gemini REST: POST https://generativelanguage.googleapis.com/v1beta/models/{GEMIN
 
     python -m pip install -r scripts/requirements.txt
     export LLM_API_KEY="ваш_ключ"
-    python -m unittest discover -s scripts/tests
+    python -m unittest discover -s scripts/tests -v
     python scripts/update_widget.py
 
 ## 4. Android APK / GitHub Releases
