@@ -66,9 +66,9 @@ class FilterTests(unittest.TestCase):
         prompt = app.summarize_prompt([{"post_id": "1", "text": "История о выборе и ответственности."}])
         self.assertIn("<posts>", prompt)
         self.assertIn("финальный вывод каждого поста", prompt)
-        self.assertIn("извлечь из каждого поста главную мысль", app.SYSTEM_INSTRUCTION)
+        self.assertIn("самостоятельную глубокую мысль", app.SYSTEM_INSTRUCTION)
         self.assertIn("Ты редактор сборника практической психологии", app.SYSTEM_INSTRUCTION)
-        self.assertIn("hidden_mechanism", app.SYSTEM_INSTRUCTION)
+        self.assertIn("hidden_cause", app.SYSTEM_INSTRUCTION)
         self.assertIn("final_takeaway", app.SYSTEM_INSTRUCTION)
         self.assertIn("summary", app.SYSTEM_INSTRUCTION)
         self.assertIn("Читай пост до последнего абзаца", app.SYSTEM_INSTRUCTION)
@@ -154,9 +154,9 @@ class GeminiTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in sleep_mock.call_args_list], [5, 15])
 
     def test_tags_are_normalized_filtered_deduplicated_and_limited_to_two(self):
-        meaningful = {"post_id": "1", "is_meaningful": True, "hidden_mechanism": "Причина",
+        meaningful = {"post_id": "1", "is_meaningful": True, "hidden_cause": "Причина",
                       "final_takeaway": "Вывод", "summary": "Текст", "tags": [" #Границы ", "отношения", "НЕИЗВЕСТНЫЙ", "ГРАНИЦЫ", "Семья"]}
-        rejected = {"post_id": "2", "is_meaningful": False, "hidden_mechanism": "",
+        rejected = {"post_id": "2", "is_meaningful": False, "hidden_cause": "",
                     "final_takeaway": "", "summary": "", "tags": ["Отношения"]}
         result = validate_model_results([meaningful, rejected], {"1", "2"})
         self.assertEqual(result["1"]["tags"], ["Границы", "Отношения"])
@@ -166,7 +166,7 @@ class GeminiTests(unittest.TestCase):
         self.assertEqual(app.RESULT_SCHEMA["items"]["properties"]["tags"]["type"], "ARRAY")
         self.assertIn("tags", app.RESULT_SCHEMA["items"]["required"])
         self.assertEqual(app.RESULT_SCHEMA["items"]["propertyOrdering"], [
-            "post_id", "is_meaningful", "hidden_mechanism", "final_takeaway", "summary", "tags"
+            "post_id", "is_meaningful", "hidden_cause", "final_takeaway", "summary", "tags"
         ])
         self.assertEqual(app.RESULT_SCHEMA["items"]["required"], app.RESULT_SCHEMA["items"]["propertyOrdering"])
         prompt = app.summarize_prompt([{"post_id": "1", "text": "Содержательный текст"}])
@@ -190,7 +190,7 @@ class GeminiTests(unittest.TestCase):
     @patch.object(app, "gemini_request")
     def test_annotation_prefix_triggers_one_targeted_rephrase(self, request_mock):
         result = {"7": {"post_id": "7", "is_meaningful": True,
-                        "hidden_mechanism": "Страх отвержения заставляет идеализировать партнёра.",
+                        "hidden_cause": "Страх отвержения заставляет идеализировать партнёра.",
                         "final_takeaway": "Признавайте реальность отношений.",
                         "summary": "Пример того, как человек идеализирует партнёра.",
                         "tags": ["Отношения"]}}
@@ -198,9 +198,13 @@ class GeminiTests(unittest.TestCase):
         self.assertTrue(app.needs_summary_rephrase(result["7"]["summary"]))
         app.rephrase_invalid_summaries(result, "secret", "gemini-4-hydrogen")
         self.assertEqual(request_mock.call_count, 1)
-        self.assertIn("hidden_mechanism", request_mock.call_args.args[0])
+        self.assertIn("hidden_cause", request_mock.call_args.args[0])
         self.assertEqual(result["7"]["summary"],
                          "Идеализация скрывает страх отвержения, поэтому важно видеть реального партнёра.")
+
+    def test_bad_phrases_trigger_targeted_rephrase(self):
+        for phrase in ("Заметив этот механизм", "Тут действует ТАКОЙ механизм", "оплатить будущую потерю"):
+            self.assertTrue(app.needs_summary_rephrase(phrase))
 
     def test_user_prompt_wraps_posts_before_final_instruction(self):
         prompt = app.summarize_prompt([{"post_id": "1", "text": "Содержание поста"}])
@@ -215,9 +219,9 @@ class GeminiTests(unittest.TestCase):
             validate_model_results([item], {"1"})
 
     def test_model_results_are_complete_and_unique(self):
-        a = {"post_id": "1", "is_meaningful": True, "hidden_mechanism": "Причина",
+        a = {"post_id": "1", "is_meaningful": True, "hidden_cause": "Причина",
              "final_takeaway": "Вывод", "summary": "Текст", "tags": ["Эмоции"]}
-        b = {"post_id": "2", "is_meaningful": False, "hidden_mechanism": "",
+        b = {"post_id": "2", "is_meaningful": False, "hidden_cause": "",
              "final_takeaway": "", "summary": "", "tags": []}
         self.assertEqual(set(validate_model_results([a, b], {"1", "2"})), {"1", "2"})
         for items in ([a], [a, {**b, "post_id": "3"}], [a, a]):
@@ -250,15 +254,16 @@ class FeedTests(unittest.TestCase):
         now = datetime(2026, 11, 25, 12, 0, tzinfo=timezone.utc)
         updated = build_updated_data(original, [
             {"post_id": "11", "published_at": "2026-11-25T11:00:00Z", "summary": "Смысл",
-             "hidden_mechanism": "Черновая причина", "final_takeaway": "Черновой вывод",
-             "tags": ["Границы"]}
+             "hidden_cause": "Черновая причина", "final_takeaway": "Черновой вывод",
+             "tags": ["Границы"], "generated_by": "gemini-4-hydrogen"}
         ], 11, now)
         self.assertEqual(updated["app_update"], metadata)
         self.assertEqual(updated["schema_version"], 1)
         self.assertEqual(updated["last_checked_post_id"], "11")
         self.assertEqual(updated["quotes"][0]["tags"], ["Границы"])
-        self.assertNotIn("hidden_mechanism", updated["quotes"][0])
+        self.assertNotIn("hidden_cause", updated["quotes"][0])
         self.assertNotIn("final_takeaway", updated["quotes"][0])
+        self.assertEqual(updated["quotes"][0]["generated_by"], "gemini-4-hydrogen")
         self.assertEqual(updated["quotes"][1]["tags"], [])
 
 
@@ -278,7 +283,7 @@ class FeedTests(unittest.TestCase):
             payload = json.loads(prompt.split("<posts>\n", 1)[1].split("\n</posts>", 1)[0])
             return [{
                 "post_id": item["post_id"], "is_meaningful": True,
-                "hidden_mechanism": "Скрытая причина",
+                "hidden_cause": "Скрытая причина",
                 "final_takeaway": "Практический вывод",
                 "summary": "Осознание причины помогает изменить привычную реакцию.",
                 "tags": ["Осознанность"],
@@ -306,6 +311,61 @@ class FeedTests(unittest.TestCase):
 
 
 class JsonSafetyTests(unittest.TestCase):
+    def _run_force_case(self, old_quotes, overwrite=False):
+        posts = [{"post_id": str(i + 1), "published_at": "2026-11-26T08:00:00Z",
+                  "source_url": f"https://t.me/safin4/{i + 1}",
+                  "text": "Содержательная психологическая публикация длиной более пятидесяти символов. " * 2}
+                 for i in range(max(1, len(old_quotes)))]
+        original = {"schema_version": 1, "last_checked_post_id": "99",
+                    "updated_at": "2026-11-25T00:00:00Z", "app_update": {"latest_version_code": 1},
+                    "quotes": old_quotes}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "widget_data.json"
+            path.write_text(json.dumps(original, ensure_ascii=False), encoding="utf-8")
+            with patch.object(app, "DATA_PATH", path), patch.object(app, "fetch_posts", return_value=(posts, 99)), \\
+                 patch.object(app, "gemini_request") as mock, patch.object(app.time, "sleep"), \\
+                 patch.dict("os.environ", {"LLM_API_KEY": "test-key", "FORCE_REGENERATE": "true",
+                     "OVERWRITE_LOCKED": "true" if overwrite else "false", "LOCKED_MODELS": "gemini-4-hydrogen"}):
+                def generate(prompt, *_):
+                    payload = json.loads(prompt.split("<posts>\\n", 1)[1].split("\\n</posts>", 1)[0])
+                    return [{"post_id": p["post_id"], "is_meaningful": True, "hidden_cause": "Причина",
+                             "final_takeaway": "Вывод", "summary": "Новая самостоятельная мысль меняет привычную реакцию.",
+                             "tags": ["Осознанность"]} for p in payload]
+                mock.side_effect = generate
+                mock.last_model = "gemini-3.5-flash-lite"
+                app.run()
+            return json.loads(path.read_text(encoding="utf-8")), mock
+
+    def test_locked_hydrogen_quote_is_not_regenerated(self):
+        quote = {"post_id": "1", "published_at": "2026-11-26T08:00:00Z",
+                 "summary": "Закреплённая цитата", "tags": ["Отношения"],
+                 "generated_by": "gemini-4-hydrogen"}
+        saved, mock = self._run_force_case([quote])
+        self.assertEqual(mock.call_count, 0)
+        self.assertEqual(saved["quotes"][0], quote)
+
+    def test_flash_and_missing_generated_by_quotes_are_regenerated(self):
+        weak = {"post_id": "1", "published_at": "2026-11-26T08:00:00Z",
+                "summary": "Старая цитата", "tags": ["Отношения"], "generated_by": "gemini-3.5-flash-lite"}
+        legacy = {"post_id": "2", "published_at": "2026-11-26T08:00:00Z",
+                  "summary": "Без модели", "tags": ["Эмоции"]}
+        saved, mock = self._run_force_case([weak, legacy])
+        self.assertEqual(mock.call_count, 1)
+        by_id = {q["post_id"]: q for q in saved["quotes"]}
+        self.assertEqual(by_id["1"]["generated_by"], "gemini-3.5-flash-lite")
+        self.assertEqual(by_id["2"]["generated_by"], "gemini-3.5-flash-lite")
+        self.assertNotEqual(by_id["1"]["summary"], weak["summary"])
+
+    def test_overwrite_locked_regenerates_locked_quotes(self):
+        quote = {"post_id": "1", "published_at": "2026-11-26T08:00:00Z",
+                 "summary": "Закреплённая цитата", "tags": ["Отношения"],
+                 "generated_by": "gemini-4-hydrogen"}
+        saved, mock = self._run_force_case([quote], overwrite=True)
+        self.assertEqual(mock.call_count, 1)
+        self.assertEqual(saved["quotes"][0]["generated_by"], "gemini-3.5-flash-lite")
+        self.assertNotEqual(saved["quotes"][0]["summary"], quote["summary"])
+
+
     def test_force_regenerate_flag_is_case_insensitive(self):
         for value in ("true", "TRUE", "1", "yes", "YES", " on ", "false", "0", ""):
             with self.subTest(value=value):
